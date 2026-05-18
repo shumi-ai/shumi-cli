@@ -1,87 +1,158 @@
 # shumi
 
-Crypto trade intelligence from your terminal. Powered by [Shumi AI](https://shumi.ai).
-
-## Install
+Crypto trade intelligence from your terminal. Built for humans **and** AI agents.
 
 ```bash
 npm install -g shumi
 ```
 
-## Quick Start
+## Use Shumi from your AI agent
+
+Shumi is designed to be called by AI agents (Claude Desktop, Cursor, Codex CLI, Aider, opencode, Gemini CLI). Every command supports `--json` output, every command supports `--agent` mode (JSON + no spinner + no color + no update notifier), and stdout auto-switches to JSON when piped — so `shumi coin risk BTC | jq` Just Works™ from inside an agent loop.
 
 ```bash
-# Try one query free — no account needed
+# Tell an agent: "fetch BTC's risk context"
+$ shumi coin risk BTC --json | jq .data
+{
+  "symbol": "BTC",
+  "price": 67234.12,
+  "funding_apr": 0.0421,
+  "trend_daily": "UP",
+  "trend_weekly": "UP",
+  "sentiment_stance": "bullish",
+  "btc_correlation": 1.0
+}
+
+# Capability self-discovery
+$ shumi commands --json | jq '.commands[].name'
+
+# Health check before a long agent run
+$ shumi doctor --json | jq '.data.ok'
+```
+
+### Add to your agent
+
+**Claude Code, Cursor, Codex CLI, opencode** — they shell out to anything on `$PATH`. After `npm i -g shumi && shumi login`, prompt your agent: *"Use the `shumi` CLI to fetch the active regime and BTC risk, then summarize."* The agent reads `shumi --help` and `shumi commands --json` to discover the surface; no per-tool wiring required.
+
+**MCP** — a thin MCP wrapper (`@shumi-ai/mcp`) is on the roadmap. Until then, the CLI's typed surface is the canonical machine-readable interface.
+
+## Quick start
+
+```bash
+# One free query, no account
 shumi coin BTC
 
-# Authenticate for unlimited access
+# Sign in for unlimited
 shumi login
 
-# Market overview
-shumi market
+# Typed data — deterministic, scriptable
+shumi coin risk BTC                       # bundled risk context
+shumi funding momentum --symbol BTC       # perpetual funding momentum
+shumi regime active                       # active regime positions
+shumi signal-quality                      # Sharpe / win-rate envelope
+shumi market prices --symbols BTC,ETH,SOL # bulk live prices
+shumi billing tier                        # your entitlement
 
-# Sentiment analysis
-shumi sentiment --coin ETH
-
-# Trend scanner
-shumi trends --aligned
-
-# Delta-neutral funding rate opportunities
-shumi delta-neutral --exchange Hyperliquid
-
-# Free-form question
-shumi ask "Why is HYPE pumping?"
+# Or just ask
+shumi ask "why is HYPE pumping?"
 ```
 
 ## Commands
 
+### Typed data (deterministic, scriptable, `--json` friendly)
+
+| Command | Endpoint |
+|---|---|
+| `shumi coin risk <symbol>` | Bundled risk context (price, funding, trend, sentiment, BTC correlation) |
+| `shumi funding momentum [--symbol X]` | Funding-rate momentum, market-wide or per coin |
+| `shumi regime active\|signals\|history <sym>\|confidence` | Market regime state |
+| `shumi signal-quality` | Sharpe, win rate, sample size for the signal layer |
+| `shumi market prices [--symbols ...] [--baselines]` | Bulk live prices, optional 4h/24h/7d baselines |
+
+### NLP queries (free-form, AI-routed)
+
 | Command | Description |
-|---------|-------------|
-| `shumi coin <symbol>` | Coin analysis (trend, streak, bands, sentiment) |
-| `shumi market` | Market health overview (UP/HODL/DOWN distribution) |
-| `shumi sentiment` | Market or coin sentiment analysis |
-| `shumi trends` | Fresh, stale, or aligned trend scanner |
-| `shumi scan` | Filter coins by trend, category, market cap, exchange |
-| `shumi category [name]` | Category trend breakdown |
-| `shumi narratives [name]` | Emerging narrative sentiment |
-| `shumi delta-neutral` | Funding rate arbitrage opportunities |
-| `shumi tweets <handle>` | Recent tweets from a Twitter account |
-| `shumi search <query>` | Web search for crypto information |
-| `shumi ask <question>` | Free-form question to Shumi AI |
-| `shumi login` | Authenticate via browser (Dynamic.xyz wallet) |
-| `shumi logout` | Clear stored credentials |
-| `shumi whoami` | Show current auth status |
-| `shumi health` | Check service connectivity |
+|---|---|
+| `shumi coin <symbol>` | Coin analysis (trend, bands, sentiment) |
+| `shumi market` | Market health overview |
+| `shumi sentiment [--coin X\|--category Y\|--narrative Z]` | Sentiment analysis |
+| `shumi trends [--fresh\|--stale\|--aligned]` | Trend scanner |
+| `shumi scan [filters]` | Filter coins |
+| `shumi category [name]` | Category breakdown |
+| `shumi narratives [name]` | Emerging narratives |
+| `shumi delta-neutral` | Funding-rate arbitrage |
+| `shumi tweets <handle>` | Recent tweets |
+| `shumi search <query>` | Web search |
+| `shumi ask <query>` | Free-form question |
 
-## Common Options
+### Meta
 
-| Flag | Description |
-|------|-------------|
-| `--raw` | Output raw JSON instead of formatted markdown |
-| `--interval <1d\|1w>` | Select time interval |
-| `--limit <n>` | Limit number of results |
+| Command | Description |
+|---|---|
+| `shumi billing tier` | Show entitlement (tier, source, expiry) |
+| `shumi doctor` | Diagnostics: auth, network, version |
+| `shumi version` | Build info (`--json` returns structured) |
+| `shumi commands` | Capability manifest (`--json` for agents) |
+| `shumi login\|logout\|whoami` | Wallet auth |
+| `shumi keys create\|list\|revoke` | Manage API keys for headless use |
+| `shumi health` | Service connectivity |
+
+## Global flags
+
+| Flag | Behavior |
+|---|---|
+| `--json` | Force JSON envelope on stdout |
+| `--agent` | Machine mode: JSON, no spinner, no color, no update notifier, machine error envelope on stderr |
+| `--no-color` | Disable colors (`NO_COLOR=1` env var also honored) |
+| `SHUMI_AGENT=1` | Same as `--agent`, but persistent in your shell |
+| `SHUMI_NO_UPDATE_NOTIFIER=1` | Suppress the update check |
+| `SHUMI_API_URL=<url>` | Override the API endpoint (preview deploys, self-hosting) |
+| `SHUMI_TOKEN=shumi_sk_...` | API key for headless / CI use |
+
+## Exit codes
+
+Pinned, documented, AI-agent-safe.
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | User error (bad flags) |
+| `2` | Auth required / invalid |
+| `3` | Rate-limited / billing block |
+| `4` | Upstream 4xx |
+| `5` | Upstream 5xx |
+| `6` | Network / timeout |
+| `7` | Internal error |
+| `130` | Interrupted (SIGINT) |
+
+## Error envelope
+
+Errors always emit a stable JSON envelope on **stderr**, so `stdout | jq` never breaks:
+
+```json
+{
+  "schemaVersion": 1,
+  "error": {
+    "code": "AUTH_REQUIRED",
+    "message": "Authentication required. Run: shumi login"
+  }
+}
+```
+
+Success envelopes carry `schemaVersion`, `data`, and `meta`. Bump `schemaVersion` on a breaking shape change — pinned clients can detect.
 
 ## Authentication
 
-Shumi uses browser-based wallet authentication via [Dynamic.xyz](https://dynamic.xyz).
+```bash
+shumi login           # browser-based wallet auth (Dynamic.xyz)
+shumi keys create     # issue an API key for headless / CI / agent use
+```
 
-1. Run `shumi login`
-2. Your browser opens to authenticate
-3. Connect your wallet
-4. Return to the terminal — you're authenticated
-
-Credentials are stored locally in `~/.shumi/config.json` with restrictive file permissions (owner-only read/write). Tokens expire automatically and you'll be prompted to re-authenticate.
-
-## How It Works
-
-The CLI is a thin client. All intelligence (query classification, data fetching, AI response generation) runs server-side. The CLI translates your commands into natural language queries, sends them to the Shumi API over HTTPS, and renders the markdown response in your terminal.
-
-No API keys, model configurations, or proprietary code are included in this package.
+Set `SHUMI_TOKEN=shumi_sk_...` in environments without a browser. Credentials are stored at `~/.shumi/config.json` (`0600`). Tokens expire and `shumi doctor` will tell you when.
 
 ## Requirements
 
-- Node.js 18 or later
-- A modern terminal with Unicode support
+- Node.js 20+
 
 ## License
 

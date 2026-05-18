@@ -1,22 +1,30 @@
-import { execute } from '../lib/execute.js';
-import { buildTrendsQuery } from '../lib/query-builder.js';
+import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
+/**
+ * Typed trends commands. Replaces the prior NLP-only `shumi trends`.
+ * Default action (no subcommand) returns fresh trends.
+ */
 export function registerTrendsCommand(program) {
-  program
+  const trends = program
     .command('trends')
-    .description('trend analysis (fresh, stale, or aligned)')
-    .option('--fresh', 'show freshly started trends (default)')
-    .option('--stale', 'show longest-running trends')
-    .option('--aligned', 'show coins aligned across all timeframes')
-    .option('--interval <interval>', 'trend interval (1d, 1w)', '1d')
-    .option('--limit <n>', 'max results', parseInt)
-    .option('--raw', 'output raw JSON data')
-    .action(async (options) => {
-      const queryText = buildTrendsQuery(options);
-      await execute({
-        queryText,
-        raw: options.raw,
-        commandContext: 'trends',
-      });
-    });
+    .description('trend analysis (fresh, stale, aligned, extreme, historical)')
+    .option('--limit <n>', 'max results')
+    .option('--interval <interval>', 'trend interval (1d, 1w)')
+    .action(typedAction({
+      route: 'trends',
+      query: (ctx, opts) => ({ action: 'fresh', ...(opts.limit && { limit: opts.limit }), ...(opts.interval && { interval: opts.interval }) }),
+      spinner: 'fresh trends…',
+    }));
+
+  for (const action of ['fresh', 'stale', 'aligned', 'extreme', 'historical']) {
+    trends.command(action)
+      .description(`${action} trends`)
+      .option('--limit <n>', 'max results')
+      .option('--interval <interval>', 'trend interval (1d, 1w)')
+      .action(typedAction({
+        route: 'trends',
+        query: (ctx, opts) => ({ action, ...(opts.limit && { limit: opts.limit }), ...(opts.interval && { interval: opts.interval }) }),
+        spinner: `${action} trends…`,
+      }));
+  }
 }

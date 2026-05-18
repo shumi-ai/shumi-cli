@@ -3,7 +3,18 @@ import { join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 
-const API_URL = 'https://coinrotator.app/api/cli';
+// The data/CLI surface talks to coinrotator-ai (Fastify on Render). Vercel was
+// the wrong runtime — cold starts, streaming flakiness, and a 300s max-duration
+// cap that broke `shumi watch`. Render keeps Fastify warm and supports proper
+// NDJSON streaming via reply.raw.
+const DEFAULT_API_URL = 'https://coinrotator-ai.onrender.com/api/cli';
+const API_URL = (process.env.SHUMI_API_URL || DEFAULT_API_URL).replace(/\/$/, '');
+
+// API key management (/keys) stays on the Next.js app — that's where the JWT
+// verification flow lives (Dynamic.xyz wallet auth issues a JWT, the user
+// trades it for one or more shumi_sk_* keys). Override via SHUMI_KEYS_URL.
+const DEFAULT_KEYS_URL = 'https://coinrotator.app/api/keys';
+const KEYS_URL = (process.env.SHUMI_KEYS_URL || DEFAULT_KEYS_URL).replace(/\/$/, '');
 const CONFIG_DIR = join(homedir(), '.shumi');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
@@ -51,6 +62,10 @@ export function getDeviceId() {
 
 export function getToken() {
   if (process.env.SHUMI_TOKEN) return process.env.SHUMI_TOKEN;
+  // Skip config-file fallback when explicitly requested. Useful for tests that
+  // want to verify the "no token" code path even when the developer's
+  // ~/.shumi/config.json holds a real JWT.
+  if (process.env.SHUMI_NO_CONFIG === '1') return null;
   const config = readConfig();
   if (!config.token) return null;
   if (config.expiresAt && new Date(config.expiresAt) < new Date()) {
@@ -74,4 +89,4 @@ export function clearCredentials() {
   writeConfig(rest);
 }
 
-export { API_URL, CONFIG_DIR, CONFIG_FILE };
+export { API_URL, KEYS_URL, CONFIG_DIR, CONFIG_FILE };

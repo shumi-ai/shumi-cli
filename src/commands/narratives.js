@@ -1,19 +1,18 @@
-import { execute } from '../lib/execute.js';
-import { buildNarrativesQuery } from '../lib/query-builder.js';
+import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
+/**
+ * Typed narratives commands. `shumi narratives` lists active narratives;
+ * `shumi narratives <name>` returns sentiment for that narrative
+ * (equivalent to `shumi sentiment narrative <name>`).
+ */
 export function registerNarrativesCommand(program) {
   program
-    .command('narratives [name]')
-    .description('emerging narratives (or sentiment for a specific narrative)')
-    .option('--interval <interval>', 'time interval (1d, 1w, 1m)', '1d')
-    .option('--refresh', 'force fresh analysis')
-    .option('--raw', 'output raw JSON data')
-    .action(async (name, options) => {
-      const queryText = buildNarrativesQuery(name, options);
-      await execute({
-        queryText,
-        raw: options.raw,
-        commandContext: 'narratives',
-      });
-    });
+    .command('narratives')
+    .argument('[name]', 'narrative name (omit to list all active)')
+    .description('list active narratives or get sentiment for one')
+    .action(typedAction({
+      route: (ctx) => ctx.args[0] ? 'sentiment' : 'narratives',
+      query: (ctx) => ctx.args[0] ? { action: 'narrative', name: ctx.args[0] } : {},
+      spinner: (ctx) => ctx.args[0] ? `narrative ${ctx.args[0]}…` : 'active narratives…',
+    }));
 }

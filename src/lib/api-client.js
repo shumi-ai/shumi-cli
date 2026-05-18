@@ -1,11 +1,47 @@
-import { API_URL, getDeviceId, getToken, getWalletAddress } from './config.js';
+import { API_URL, KEYS_URL, getDeviceId, getToken, getWalletAddress } from './config.js';
+
+const TYPED_BASE = API_URL; // already .../api/cli — typed routes nest under it
+const TYPED_TIMEOUT_MS = 60_000;
 
 export class ApiError extends Error {
   constructor(status, body) {
-    super(body?.error || body?.message || `API request failed: ${status}`);
+    const msg = body?.error?.message || body?.error || body?.message || `API request failed: ${status}`;
+    super(msg);
     this.status = status;
     this.body = body;
   }
+}
+
+/**
+ * GET a typed CLI endpoint (under `${API_URL}/<path>`). Returns the parsed JSON envelope.
+ * Throws ApiError on non-2xx. Token is required (typed surface = paid surface).
+ */
+export async function apiGet(path, query = {}) {
+  const token = getToken();
+  if (!token) throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
+
+  const url = new URL(`${TYPED_BASE}/${path.replace(/^\//, '')}`);
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null && v !== false) url.searchParams.set(k, String(v));
+  }
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal: AbortSignal.timeout(TYPED_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
+  }
+
+  const text = await response.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = { error: { code: 'INTERNAL', message: text || 'invalid response' } }; }
+
+  if (!response.ok) throw new ApiError(response.status, body);
+  return body;
 }
 
 export async function query({ messages, raw = false, archetype = 'base', commandContext = null }) {
@@ -60,8 +96,6 @@ export async function query({ messages, raw = false, archetype = 'base', command
 
   return response.json();
 }
-
-const KEYS_URL = API_URL.replace('/cli', '/keys');
 
 export async function createKey(name) {
   const token = getToken();

@@ -1,21 +1,45 @@
-import { execute } from '../lib/execute.js';
-import { buildSentimentQuery } from '../lib/query-builder.js';
+import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
+/**
+ * Typed sentiment command tree. Replaces the prior NLP-only `shumi sentiment`.
+ * Default action (`shumi sentiment` with no subcommand) returns market sentiment.
+ */
 export function registerSentimentCommand(program) {
-  program
+  const sent = program
     .command('sentiment')
-    .description('sentiment analysis (market, coin, category, or narrative)')
-    .option('--coin <symbol>', 'sentiment for a specific coin')
-    .option('--category <name>', 'sentiment for a category')
-    .option('--narrative <name>', 'sentiment for a narrative')
-    .option('--interval <interval>', 'time interval (1h, 1d, 1w, 1m)', '1d')
-    .option('--raw', 'output raw JSON data')
-    .action(async (options) => {
-      const queryText = buildSentimentQuery(options);
-      await execute({
-        queryText,
-        raw: options.raw,
-        commandContext: 'sentiment',
-      });
-    });
+    .description('sentiment analysis (market, coin, category, narrative, slopes)')
+    .action(typedAction({ route: 'sentiment', query: { action: 'market' }, spinner: 'market sentiment…' }));
+
+  for (const action of ['latest', 'market', 'summary', 'narratives', 'categories', 'health', 'slopes', 'entity-slopes']) {
+    sent.command(action)
+      .description(`sentiment ${action}`)
+      .action(typedAction({ route: 'sentiment', query: { action }, spinner: `sentiment ${action}…` }));
+  }
+
+  sent.command('coin')
+    .argument('<symbol>', 'coin symbol')
+    .description('sentiment for a coin')
+    .action(typedAction({
+      route: 'sentiment',
+      query: (ctx) => ({ action: 'coin', symbol: ctx.args[0] }),
+      spinner: (ctx) => `sentiment for ${ctx.args[0]}…`,
+    }));
+
+  sent.command('category')
+    .argument('<name>', 'category name')
+    .description('sentiment for a category')
+    .action(typedAction({
+      route: 'sentiment',
+      query: (ctx) => ({ action: 'category', name: ctx.args[0] }),
+      spinner: (ctx) => `sentiment for ${ctx.args[0]}…`,
+    }));
+
+  sent.command('narrative')
+    .argument('<name>', 'narrative name')
+    .description('sentiment for a narrative')
+    .action(typedAction({
+      route: 'sentiment',
+      query: (ctx) => ({ action: 'narrative', name: ctx.args[0] }),
+      spinner: (ctx) => `sentiment for ${ctx.args[0]}…`,
+    }));
 }
