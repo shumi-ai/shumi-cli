@@ -11,6 +11,7 @@ import { registerSearchCommand } from './commands/search.js';
 import { registerAuthCommands } from './commands/auth.js';
 import { registerHealthCommand } from './commands/health.js';
 import { registerKeysCommand } from './commands/keys.js';
+import { registerWalletCommand } from './commands/wallet.js';
 import { registerFundingCommand } from './commands/funding.js';
 import { registerRegimeCommand } from './commands/regime.js';
 import { registerSignalQualityCommand } from './commands/signalQuality.js';
@@ -77,6 +78,7 @@ export function registerCommands(program) {
   registerAuthCommands(program);
   registerHealthCommand(program);
   registerKeysCommand(program);
+  registerWalletCommand(program);   // x402 pay-per-query wallet (address/balance/fund/create)
 
   // Default action for `shumi` with no subcommand — market overview dashboard.
   // Falls back to help if user isn't authenticated.
