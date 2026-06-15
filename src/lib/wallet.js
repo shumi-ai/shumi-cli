@@ -284,6 +284,41 @@ export function appendPaymentReceipt(fields) {
   }
 }
 
+/**
+ * Read the receipt log and sum spending within a UTC date window. Used by the
+ * daily-cap check before authorizing a new payment. The receipt log is the
+ * single source of truth for client-side spend tracking — no separate DB.
+ *
+ * Window is anchored to UTC midnight rather than rolling 24h: simpler mental
+ * model ("today's spend"), and matches the `ts` ISO strings we write.
+ *
+ * Returns total in USDC dollars as a number. Best-effort: on read error,
+ * returns 0 (fail-open — we'd rather let a paying user through than block
+ * them because the log got corrupted).
+ */
+export function sumSpendSinceUtcMidnight() {
+  try {
+    if (!existsSync(PAYMENTS_LOG_PATH)) return 0;
+    const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+    const lines = readFileSync(PAYMENTS_LOG_PATH, 'utf8').split('\n').filter(Boolean);
+    let total = 0;
+    for (const l of lines) {
+      try {
+        const r = JSON.parse(l);
+        if (typeof r.ts === 'string' && r.ts.slice(0, 10) === today) {
+          // Skip failed payments (no tx hash) — only count actually-settled spend.
+          if (r.tx) total += parseFloat(r.amountUsdc) || 0;
+        }
+      } catch {
+        // Tolerate malformed lines — old CLI versions, manual edits, etc.
+      }
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
 // Exported for tests
 export const __testing = {
   encryptKeystore,

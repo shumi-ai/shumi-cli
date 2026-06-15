@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync, rmSync, mkdtempSync } from 'fs';
+import { existsSync, rmSync, mkdtempSync, writeFileSync, mkdirSync } from 'fs';
 
 // Force ~/.shumi/ to a tmp dir so we don't touch the developer's real keystore.
 // Must happen BEFORE the wallet module imports. HOME env override is the
@@ -28,9 +28,11 @@ isolateHome();
 const wallet = await import('../../src/lib/wallet.js');
 const {
   createKeystore, loadPrivateKey, readKeystoreAddress,
-  hasKeystore, hasEnvKey, hasWallet,
+  hasKeystore, hasEnvKey, hasWallet, sumSpendSinceUtcMidnight,
   __testing: { encryptKeystore, decryptKeystore, KEYSTORE_PATH },
 } = wallet;
+
+const PAYMENTS_LOG_PATH = join(tmpHome, '.shumi', 'payments.log');
 
 describe('keystore — encrypt/decrypt round-trip', () => {
   it('encrypts then decrypts back to the same key', () => {
@@ -127,6 +129,47 @@ describe('env-var override — SHUMI_X402_PRIVATE_KEY beats keystore', () => {
   it('rejects malformed env key (wrong length)', () => {
     process.env.SHUMI_X402_PRIVATE_KEY = '0xdeadbeef';
     expect(() => loadPrivateKey({})).toThrow(/32 bytes/);
+  });
+});
+
+describe('sumSpendSinceUtcMidnight — daily-cap source of truth', () => {
+  beforeEach(() => {
+    // Ensure the parent dir exists so writeFileSync can lay down a fresh log.
+    mkdirSync(join(tmpHome, '.shumi'), { recursive: true });
+    if (existsSync(PAYMENTS_LOG_PATH)) rmSync(PAYMENTS_LOG_PATH);
+  });
+
+  it('returns 0 when no payments.log exists yet', () => {
+    expect(sumSpendSinceUtcMidnight()).toBe(0);
+  });
+
+  it('sums today\'s settled (tx-bearing) payments and ignores failures', () => {
+    const today = new Date().toISOString();
+    const yesterday = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+    const lines = [
+      // today, settled — counts
+      JSON.stringify({ ts: today, amountUsdc: '0.005', tx: '0xabc' }),
+      JSON.stringify({ ts: today, amountUsdc: '0.05', tx: '0xdef' }),
+      // today, NO tx — failed/declined — does NOT count
+      JSON.stringify({ ts: today, amountUsdc: '0.10', tx: null }),
+      // yesterday, settled — does NOT count (outside UTC-today window)
+      JSON.stringify({ ts: yesterday, amountUsdc: '1.00', tx: '0x111' }),
+    ].join('\n') + '\n';
+    writeFileSync(PAYMENTS_LOG_PATH, lines, { mode: 0o600 });
+    const total = sumSpendSinceUtcMidnight();
+    // 0.005 + 0.05 = 0.055
+    expect(total).toBeCloseTo(0.055, 6);
+  });
+
+  it('tolerates malformed lines (old format, manual edits)', () => {
+    const today = new Date().toISOString();
+    const lines = [
+      'not-json-at-all',
+      JSON.stringify({ ts: today, amountUsdc: '0.005', tx: '0xabc' }),
+      '{"truncated":',
+    ].join('\n') + '\n';
+    writeFileSync(PAYMENTS_LOG_PATH, lines, { mode: 0o600 });
+    expect(sumSpendSinceUtcMidnight()).toBeCloseTo(0.005, 6);
   });
 });
 

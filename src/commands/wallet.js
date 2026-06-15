@@ -5,9 +5,9 @@ import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import {
   hasKeystore, hasEnvKey, hasWallet, readKeystoreAddress,
-  createKeystore, getUsdcBalance, buildOnrampUrl,
+  createKeystore, getUsdcBalance, buildOnrampUrl, loadPrivateKey,
 } from '../lib/wallet.js';
-import { promptHidden } from '../lib/prompt.js';
+import { promptHidden, promptYesNo } from '../lib/prompt.js';
 
 const NO_WALLET_HINT = 'Run `shumi wallet create` to generate one, or set SHUMI_X402_PRIVATE_KEY in your environment.';
 
@@ -144,6 +144,63 @@ export function registerWalletCommand(program) {
             process.stdout.write(`${chalk.dim(ts)}  $${r.amountUsdc}  ${chalk.cyan(r.route || '?')}  ${chalk.dim(txDisplay)}\n`);
           }
         });
+      } catch (err) {
+        renderErr(err, opts);
+      }
+    });
+
+  wallet
+    .command('export')
+    .description('decrypt and print the raw private key (for backup — handle with care)')
+    .action(async function () {
+      const opts = this.optsWithGlobals();
+      try {
+        if (hasEnvKey()) {
+          renderErr({
+            message: 'SHUMI_X402_PRIVATE_KEY is set; no keystore to export.',
+            hint: 'The env-var key IS the private key. Read it from your environment.',
+          }, opts);
+          return;
+        }
+        if (!hasKeystore()) {
+          renderErr({ message: 'No wallet keystore to export.', hint: NO_WALLET_HINT }, opts);
+          return;
+        }
+        // Two confirmations before showing the key. Keystores are encrypted-at-rest
+        // for a reason — printing the plaintext to a terminal defeats that, so we
+        // make the user say "I really mean it" twice and warn loudly. JSON / agent
+        // mode refuses entirely; this is interactive-human-only.
+        if (opts.json || opts.agent) {
+          renderErr({
+            message: 'wallet export refuses to run in --json or --agent mode.',
+            hint: 'Run interactively; we never emit a private key to a non-TTY.',
+          }, opts);
+          return;
+        }
+        process.stderr.write(chalk.yellow('\n⚠  About to print your private key to this terminal.\n'));
+        process.stderr.write(chalk.yellow('   Anyone who sees it controls the funds in this wallet forever.\n\n'));
+        const ok1 = await promptYesNo('Continue? [y/N] ', { defaultYes: false });
+        if (!ok1) {
+          renderErr({ message: 'Cancelled.' }, opts);
+          return;
+        }
+        const pass = await promptHidden('Wallet passphrase: ');
+        if (!pass) {
+          renderErr({ message: 'Cancelled.' }, opts);
+          return;
+        }
+        let pk;
+        try {
+          pk = loadPrivateKey({ passphrase: pass });
+        } catch (err) {
+          renderErr({ message: err.message }, opts);
+          return;
+        }
+        const address = readKeystoreAddress();
+        process.stdout.write(chalk.bold('\nAddress:     ') + chalk.cyan(address) + '\n');
+        process.stdout.write(chalk.bold('Private key: ') + chalk.red(pk) + '\n\n');
+        process.stdout.write(chalk.dim('Store this somewhere safe (a password manager).\n'));
+        process.stdout.write(chalk.dim('To restore on another machine: set SHUMI_X402_PRIVATE_KEY=<this value>.\n'));
       } catch (err) {
         renderErr(err, opts);
       }

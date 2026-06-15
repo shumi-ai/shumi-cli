@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { __testing } from '../../src/lib/x402-client.js';
 
-const { usdcStringToBaseUnits, baseUnitsToUsdcString, isAutoPay, isAgentMode, maxPriceCeilingUsdc } = __testing;
+const {
+  usdcStringToBaseUnits, baseUnitsToUsdcString,
+  isAutoPay, isAgentMode, maxPriceCeilingUsdc,
+  dailyCapUsdc, formatChallengePrompt, truncAddress,
+} = __testing;
 
 describe('USDC <-> base unit conversions (6 decimals on Base)', () => {
   it('$0.005 → 5000 units', () => {
@@ -88,5 +92,37 @@ describe('flag resolution: agent mode, auto-pay, max price', () => {
     expect(maxPriceCeilingUsdc()).toBe('0.10');
     process.env.SHUMI_MAX_PRICE_USDC = '0.025';
     expect(maxPriceCeilingUsdc()).toBe('0.025');
+  });
+
+  it('SHUMI_DAILY_USDC_CAP override beats default $1.00', () => {
+    expect(dailyCapUsdc()).toBe('1.00');
+    process.env.SHUMI_DAILY_USDC_CAP = '5.00';
+    expect(dailyCapUsdc()).toBe('5.00');
+    delete process.env.SHUMI_DAILY_USDC_CAP;
+  });
+});
+
+describe('formatChallengePrompt — anti-phishing prompt shape', () => {
+  it('shows price, network, from-address, to-address, and balance', () => {
+    const prompt = formatChallengePrompt({
+      priceUsdcStr: '0.005',
+      route: 'coin/risk/BTC',
+      network: 'base',
+      balanceFormatted: '4.83',
+      walletAddress: '0xc624d24d17CF22ece0487101eD58B1d4742bb394',
+      payToAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
+    });
+    expect(prompt).toContain('$0.005 USDC on base');
+    expect(prompt).toContain('coin/risk/BTC');
+    expect(prompt).toContain('0xc624…b394'); // truncated from-address
+    expect(prompt).toContain('0xabcd…ef12'); // truncated to-address
+    expect(prompt).toContain('$4.83');
+    expect(prompt).toContain('Pay? [Y/n]');
+  });
+
+  it('truncAddress shows first 6 + last 4 chars', () => {
+    expect(truncAddress('0xc624d24d17CF22ece0487101eD58B1d4742bb394')).toBe('0xc624…b394');
+    expect(truncAddress(null)).toBe('?');
+    expect(truncAddress(undefined)).toBe('?');
   });
 });

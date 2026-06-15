@@ -26,13 +26,27 @@ import { decodeXPaymentResponse } from 'x402-fetch';
 import {
   hasWallet, hasEnvKey, hasKeystore, readKeystoreAddress,
   loadPrivateKey, createX402Signer, getUsdcBalance, appendPaymentReceipt,
+  sumSpendSinceUtcMidnight,
   USDC_DECIMALS,
 } from './wallet.js';
 import { promptYesNo, promptHidden } from './prompt.js';
 
 const X402_VERSION = 1;
 const PRICE_CEILING_DEFAULT_USDC = '0.10';
+const DAILY_CAP_DEFAULT_USDC = '1.00';
 const DECIMALS_BASE = 10n ** BigInt(USDC_DECIMALS);
+
+/**
+ * Last completed payment for this process — surfaced via getLastPaymentMeta()
+ * so callers (api-client.js) can merge it into the response envelope. Cleared
+ * before every fetch so old meta never leaks into a fetch that didn't pay.
+ */
+let lastPaymentMeta = null;
+export function consumeLastPaymentMeta() {
+  const m = lastPaymentMeta;
+  lastPaymentMeta = null;
+  return m;
+}
 
 function isAgentMode() {
   return process.env.SHUMI_AGENT === '1' || process.argv.includes('--agent');
@@ -44,6 +58,10 @@ function isAutoPay() {
 
 function maxPriceCeilingUsdc() {
   return process.env.SHUMI_MAX_PRICE_USDC || PRICE_CEILING_DEFAULT_USDC;
+}
+
+function dailyCapUsdc() {
+  return process.env.SHUMI_DAILY_USDC_CAP || DAILY_CAP_DEFAULT_USDC;
 }
 
 function usdcStringToBaseUnits(usdcStr) {
@@ -114,18 +132,25 @@ async function resolvePassphrase() {
 
 let passphraseCache = null;
 
+function truncAddress(addr) {
+  return addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '?';
+}
+
 /**
- * Format a human-readable challenge prompt:
+ * Format a human-readable challenge prompt. Shows the recipient address +
+ * network as an anti-phishing measure — if a compromised server tries to
+ * redirect payment to an unexpected address, the user sees it before signing.
  *
- *   💸 Shumi needs $0.005 USDC to run `coin/risk/BTC`.
- *      Wallet 0xc624…b394 has $4.83 USDC on Base.
+ *   💸 Shumi needs $0.005 USDC on base to run `coin/risk/BTC`.
+ *      From  0xc624…b394 (balance $4.83)
+ *      To    0xshumitreasuryaddress…1234
  *      Pay? [Y/n]
  */
-function formatChallengePrompt({ priceUsdcStr, route, balanceFormatted, walletAddress }) {
-  const trunc = walletAddress ? walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4) : '?';
+function formatChallengePrompt({ priceUsdcStr, route, network, balanceFormatted, walletAddress, payToAddress }) {
   return [
-    `💸 Shumi needs $${priceUsdcStr} USDC to run \`${route}\`.`,
-    `   Wallet ${trunc} has $${balanceFormatted} USDC on Base.`,
+    `💸 Shumi needs $${priceUsdcStr} USDC on ${network} to run \`${route}\`.`,
+    `   From  ${truncAddress(walletAddress)} (balance $${balanceFormatted})`,
+    `   To    ${truncAddress(payToAddress)}`,
     `   Pay? [Y/n] `,
   ].join('\n');
 }
@@ -140,6 +165,7 @@ function formatChallengePrompt({ priceUsdcStr, route, balanceFormatted, walletAd
  * the second response status on retry failure.
  */
 export async function fetchWithX402(input, init = {}) {
+  lastPaymentMeta = null;
   const firstResponse = await fetch(input, init);
   if (firstResponse.status !== 402) return firstResponse;
 
@@ -163,6 +189,20 @@ export async function fetchWithX402(input, init = {}) {
     throw paymentBlocked(
       `Price $${priceUsdcStr} exceeds your max ceiling $${maxPriceCeilingUsdc()}.`,
       `Override with: SHUMI_MAX_PRICE_USDC=${priceUsdcStr} <your command>`
+    );
+  }
+
+  // Daily cap: spent-today + this-call must stay under SHUMI_DAILY_USDC_CAP.
+  // Protects against an autonomous agent looping calls and burning the wallet.
+  // The per-call ceiling above is necessary but not sufficient — at $0.005 a
+  // call an agent could still spend $5/min within the ceiling.
+  const spentToday = sumSpendSinceUtcMidnight();
+  const capUnits = usdcStringToBaseUnits(dailyCapUsdc());
+  const spentTodayUnits = usdcStringToBaseUnits(spentToday.toFixed(USDC_DECIMALS));
+  if (spentTodayUnits + priceUnits > capUnits) {
+    throw paymentBlocked(
+      `Daily cap reached: $${spentToday.toFixed(4)} spent + $${priceUsdcStr} would exceed $${dailyCapUsdc()}.`,
+      `Raise with: SHUMI_DAILY_USDC_CAP=5.00 <your command>, or wait until UTC midnight.`
     );
   }
 
@@ -195,7 +235,12 @@ export async function fetchWithX402(input, init = {}) {
   // Decide whether to prompt or just go.
   if (!isAutoPay() && !isAgentMode()) {
     const ok = await promptYesNo(formatChallengePrompt({
-      priceUsdcStr, route: selected.resource, balanceFormatted, walletAddress,
+      priceUsdcStr,
+      route: selected.resource,
+      network: selected.network,
+      balanceFormatted,
+      walletAddress,
+      payToAddress: selected.payTo,
     }), { defaultYes: true });
     if (!ok) {
       throw paymentBlocked(
@@ -255,6 +300,18 @@ export async function fetchWithX402(input, init = {}) {
       payer,
       wallet: walletAddress,
     });
+    // Surface payment metadata so agent-mode callers can merge it into their
+    // JSON envelope (api-client.js does this). Silent in agent mode otherwise
+    // would mean a paying agent has no programmatic visibility into spend.
+    lastPaymentMeta = {
+      amountUsdc: priceUsdcStr,
+      route: selected.resource,
+      network: selected.network,
+      tx,
+      payer,
+      wallet: walletAddress,
+      payTo: selected.payTo,
+    };
     if (!isAgentMode()) {
       const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
       process.stderr.write(`💸 Paid $${priceUsdcStr} USDC${txDisplay}\n`);
@@ -271,4 +328,7 @@ export const __testing = {
   isAutoPay,
   isAgentMode,
   maxPriceCeilingUsdc,
+  dailyCapUsdc,
+  formatChallengePrompt,
+  truncAddress,
 };
