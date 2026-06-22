@@ -81,7 +81,7 @@ export function registerInitCommand(program) {
         line(chalk.cyan('  →'), chalk.bold('shumi commands --json | jq') + chalk.dim('     # capability manifest (for AI agents)'));
       } else {
         line(chalk.cyan('  →'), chalk.bold('shumi login') + chalk.dim('                    # authenticate first'));
-        line(chalk.dim('         after login, run: ') + chalk.cyan('shumi init') + chalk.dim(' again'));
+        line(chalk.dim('   '), chalk.dim('after login, run: ') + chalk.cyan('shumi init') + chalk.dim(' again'));
       }
 
       // Step 5: AI agent hint
