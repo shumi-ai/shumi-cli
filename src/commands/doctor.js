@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { createRequire } from 'module';
 import { API_URL, getToken, getDeviceId, CONFIG_FILE } from '../lib/config.js';
+import { inspectToken } from '../lib/token.js';
 import { resolveMode } from '../lib/output.js';
 import { Exit } from '../lib/exitCodes.js';
 import { existsSync, statSync } from 'fs';
@@ -24,7 +25,7 @@ export function registerDoctorCommand(program) {
       checks.push(checkConfigFile());
       checks.push(checkToken());
       checks.push(await checkNetwork());
-      checks.push(await checkAuthEndpoint());
+      checks.push(checkAuthValidity());
       checks.push(checkVersion());
 
       const failed = checks.some((c) => c.status === 'fail');
@@ -70,20 +71,23 @@ async function checkNetwork() {
   }
 }
 
-async function checkAuthEndpoint() {
+// Validate the credential locally (structure + expiry). This deliberately does
+// NOT hit the server: a metered route (e.g. billing/tier) would spend one of the
+// user's free queries just to run `shumi doctor`. The server stays the source of
+// truth for acceptance; this only catches the common cases (no/expired/malformed
+// token) for free.
+function checkAuthValidity() {
   const token = getToken();
-  if (!token) return { name: 'auth endpoint', status: 'warn', detail: 'skipped (no token)' };
-  try {
-    const res = await fetch(`${API_URL}/billing/tier`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (res.ok) return { name: 'auth endpoint', status: 'pass', detail: `authenticated (${res.status})` };
-    if (res.status === 401 || res.status === 403) return { name: 'auth endpoint', status: 'fail', detail: `auth rejected (${res.status})` };
-    return { name: 'auth endpoint', status: 'warn', detail: `unexpected ${res.status}` };
-  } catch (err) {
-    return { name: 'auth endpoint', status: 'fail', detail: err.message };
+  if (!token) return { name: 'auth validity', status: 'warn', detail: 'skipped (no token)' };
+  const info = inspectToken(token);
+  if (info.kind === 'API key') {
+    return { name: 'auth validity', status: 'pass', detail: 'API key present (local check — no quota used)' };
   }
+  if (!info.valid) {
+    return { name: 'auth validity', status: 'fail', detail: `${info.reason} — run: shumi login` };
+  }
+  const exp = info.expiresAt ? `, expires ${info.expiresAt.slice(0, 10)}` : '';
+  return { name: 'auth validity', status: 'pass', detail: `JWT valid${exp} (local check — no quota used)` };
 }
 
 function checkVersion() {

@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { createRequire } from 'module';
 import { getToken, CONFIG_FILE } from '../lib/config.js';
-import { apiGet } from '../lib/api-client.js';
+import { inspectToken } from '../lib/token.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json');
@@ -56,18 +56,23 @@ export function registerInitCommand(program) {
         line(chalk.red('✗'), `network: ${err.message}`);
       }
 
-      // Step 3: End-to-end auth test
-      process.stdout.write('\n' + chalk.bold('  3. End-to-end\n'));
-      if (token && networkOk) {
-        try {
-          const env = await apiGet('billing/tier');
-          const tier = env?.data?.tier || 'unknown';
-          const source = env?.data?.source || '—';
-          line(chalk.green('✓'), `authenticated against api/cli, tier: ${chalk.bold(tier)} ${chalk.dim('(' + source + ')')}`);
-        } catch (err) {
-          line(chalk.red('✗'), `auth failed: ${err.message}`);
+      // Step 3: Token validity (local — never spends a query)
+      // We intentionally do NOT call a data/billing route here: those are metered,
+      // so an end-to-end probe would burn one of the user's free queries just to
+      // run `shumi init`. Local validation catches no/expired/malformed tokens for
+      // free; the first real command confirms server acceptance.
+      process.stdout.write('\n' + chalk.bold('  3. Token validity\n'));
+      if (token) {
+        const info = inspectToken(token);
+        if (info.kind === 'API key') {
+          line(chalk.green('✓'), `API key looks valid ${chalk.dim('(local check — no quota used)')}`);
+        } else if (info.valid) {
+          const exp = info.expiresAt ? chalk.dim(` (expires ${info.expiresAt.slice(0, 10)})`) : '';
+          line(chalk.green('✓'), `JWT valid${exp} ${chalk.dim('— local check, no quota used')}`);
+        } else {
+          line(chalk.red('✗'), `token ${info.reason} — run: ` + chalk.cyan('shumi login'));
         }
-      } else if (!token) {
+      } else {
         line(chalk.dim('—'), chalk.dim('skipped (no token)'));
       }
 

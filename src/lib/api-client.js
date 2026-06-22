@@ -225,12 +225,13 @@ export async function revokeKey(prefix) {
 
 export async function healthCheck() {
   try {
-    // Check if the CLI endpoint is reachable with a minimal request
-    // A 400 (bad request) still means the server is up
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+    // Unmetered reachability probe: GET the host's /robots.txt rather than POSTing
+    // the query endpoint. The old POST hit the metered route and silently spent one
+    // of the user's free queries every time `shumi health` ran. A static GET proves
+    // the server is up without touching the quota.
+    const { protocol, host } = new URL(API_URL);
+    const response = await fetch(`${protocol}//${host}/robots.txt`, {
+      method: 'GET',
       signal: AbortSignal.timeout(10000),
     });
     return { ok: response.status < 500, status: response.status };
