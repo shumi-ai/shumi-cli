@@ -24,6 +24,22 @@ export function registerDashboardAction(program) {
     .action(async (symbol, _options, cmd) => {
     const opts = cmd.optsWithGlobals();
 
+    // Reject unknown commands. Commander routes any unrecognized subcommand to
+    // this default action with the bad token in cmd.args. Without this guard a
+    // typo (`shumi signl BTC`) silently runs the dashboard, exits 0 (an agent
+    // reads that as success), and burns metered queries on the fan-out below.
+    //
+    // Threshold is >1, not >0, because the bare-ticker shortcut below is itself
+    // a single positional: `shumi BTC` arrives as cmd.args === ['BTC']. Two or
+    // more operands can never be the shortcut, so they are always a bad command.
+    // A lone typo (`shumi signl`) falls through to runSignal and fails on the
+    // unknown symbol — still a non-zero exit, which is the bug this fixes.
+    if (cmd.args.length > 1) {
+      const unknown = cmd.args[0];
+      renderErr({ envelope: { schemaVersion: 1, error: { code: 'BAD_REQUEST', message: `unknown command '${unknown}'. Run: shumi --help` } } }, opts);
+      return;
+    }
+
     // Bare ticker shortcut: `shumi BTC` → quick signal, no subcommand needed.
     // (Subcommand names take precedence, so `shumi signal`, `shumi help`, etc.
     // still dispatch normally.)
