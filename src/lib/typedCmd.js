@@ -1,5 +1,5 @@
 import { apiGet } from './api-client.js';
-import { renderOk, renderErr, spinner } from './output.js';
+import { renderOk, renderErr, spinner, applyClientFilters } from './output.js';
 import { smartFormat } from './smartFormat.js';
 import { capture, captureError } from './telemetry.js';
 import { getToken } from './config.js';
@@ -111,37 +111,4 @@ export function addUniversalFlags(cmd) {
   return cmd
     .option('--fields <list>', 'comma-separated keys to keep (top-level)')
     .option('--top <n>', 'keep first N items if response is an array', (v) => parseInt(v, 10));
-}
-
-function applyClientFilters(env, opts) {
-  if (!env?.data) return env;
-  let d = env.data;
-
-  // --top: slice if array
-  if (opts.top && Array.isArray(d)) {
-    d = d.slice(0, opts.top);
-  } else if (opts.top && d && typeof d === 'object') {
-    // Slice the first array-valued field (common shape: { items: [...] }, { results: [...] })
-    for (const k of Object.keys(d)) {
-      if (Array.isArray(d[k])) { d = { ...d, [k]: d[k].slice(0, opts.top) }; break; }
-    }
-  }
-
-  // --fields: project (whitelist) top-level keys
-  if (opts.fields) {
-    const keep = new Set(opts.fields.split(',').map((s) => s.trim()).filter(Boolean));
-    if (Array.isArray(d)) {
-      d = d.map((row) => row && typeof row === 'object' ? pick(row, keep) : row);
-    } else if (d && typeof d === 'object') {
-      d = pick(d, keep);
-    }
-  }
-
-  return { ...env, data: d };
-}
-
-function pick(obj, keep) {
-  const out = {};
-  for (const k of keep) if (k in obj) out[k] = obj[k];
-  return out;
 }

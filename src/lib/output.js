@@ -58,11 +58,50 @@ export function spinner(text, opts = {}) {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    process.stdout.write(JSON.stringify(envelope) + '\n');
+    // Apply --fields/--top centrally so every renderOk-based command honors the
+    // globally-advertised filters (previously only typed commands did). No-ops
+    // when the flags are absent or the envelope has no .data payload.
+    process.stdout.write(JSON.stringify(applyClientFilters(envelope, opts)) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);
   else process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
+}
+
+/**
+ * Project --fields (whitelist top-level data keys) and --top (slice the first
+ * array) onto an envelope's `data`. Pure and idempotent — safe to apply more
+ * than once (typed commands pre-filter for human mode; renderOk re-applies for
+ * JSON). Returns the envelope unchanged when no filter flags are set.
+ */
+export function applyClientFilters(env, opts = {}) {
+  if (!env?.data || (!opts.top && !opts.fields)) return env;
+  let d = env.data;
+
+  if (opts.top && Array.isArray(d)) {
+    d = d.slice(0, opts.top);
+  } else if (opts.top && d && typeof d === 'object') {
+    for (const k of Object.keys(d)) {
+      if (Array.isArray(d[k])) { d = { ...d, [k]: d[k].slice(0, opts.top) }; break; }
+    }
+  }
+
+  if (opts.fields) {
+    const keep = new Set(opts.fields.split(',').map((s) => s.trim()).filter(Boolean));
+    if (Array.isArray(d)) {
+      d = d.map((row) => (row && typeof row === 'object' ? pick(row, keep) : row));
+    } else if (d && typeof d === 'object') {
+      d = pick(d, keep);
+    }
+  }
+
+  return { ...env, data: d };
+}
+
+function pick(obj, keep) {
+  const out = {};
+  for (const k of keep) if (k in obj) out[k] = obj[k];
+  return out;
 }
 
 /**
