@@ -32,6 +32,7 @@ import { registerSignalCommand } from './commands/signal.js';
 import { registerResolveCommand } from './commands/resolve.js';
 import { registerWatchCommand } from './commands/watch.js';
 import { registerDashboardAction, registerDashboardSchema } from './commands/dashboard.js';
+import { registerBriefCommand, registerBriefSchema } from './commands/brief.js';
 import { registerInitCommand } from './commands/init.js';
 import { applyBulkSchemas } from './lib/bulkSchemas.js';
 
@@ -62,6 +63,7 @@ export function registerCommands(program) {
   registerTranscriptsCommand(program);
   registerBasketCommand(program);
   registerSignalQualityCommand(program);
+  registerBriefCommand(program);     // one-screen trader digest (TG brief port)
 
   // External / NLP
   registerTweetsCommand(program);
@@ -88,6 +90,7 @@ export function registerCommands(program) {
   // Falls back to help if user isn't authenticated.
   registerDashboardAction(program);
   registerDashboardSchema(program);
+  registerBriefSchema(program);
 
   // Fill in default schemas for commands that didn't get one inline.
   // Hand-tuned `withSchema(cmd, ...)` calls take precedence (this only fills gaps).
