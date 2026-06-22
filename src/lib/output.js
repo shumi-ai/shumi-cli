@@ -80,8 +80,42 @@ export function renderErr(err, opts = {}) {
   process.stderr.write(JSON.stringify(envelope) + '\n');
   if (!mode.json && !mode.agent) {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
+    const hint = hintForError(envelope);
+    if (hint) process.stderr.write(chalk.yellow(`→ ${hint}\n`));
   }
   process.exitCode = exitCodeFromError(err);
+}
+
+/**
+ * Map an error envelope to a single actionable next-step line shown to humans
+ * (suppressed in --json / --agent modes — machines parse the envelope instead).
+ * Returns null when the message is already self-explanatory, so we never echo
+ * a redundant second line. URLs are limited to the verified product home; no
+ * pricing/upgrade deep-links are invented here.
+ */
+export function hintForError(envelope) {
+  const code = envelope?.error?.code;
+  const msg = envelope?.error?.message || '';
+  const d = envelope?.error?.details || {};
+  switch (code) {
+    case 'RATE_LIMITED':
+      if (d.tier === 'free' && d.limit != null) {
+        return `Free tier limit reached (${d.used}/${d.limit}). Manage your plan at https://shumi.ai`;
+      }
+      return 'Rate limit hit. Wait a moment and retry, or review your plan at https://shumi.ai';
+    case 'AUTH_REQUIRED':
+    case 'AUTH_INVALID':
+      // The server message usually already says "Run: shumi login" — don't double up.
+      return /shumi login/i.test(msg) ? null : 'Run: shumi login  (or set SHUMI_TOKEN=shumi_sk_… for headless use)';
+    case 'BAD_REQUEST':
+      return 'Check your flags and arguments — run the command with --help.';
+    case 'UPSTREAM_5XX':
+      return 'Upstream server error. Retry shortly; run `shumi doctor` if it persists.';
+    case 'NETWORK':
+      return 'Network or timeout problem. Check your connection, then run `shumi doctor`.';
+    default:
+      return null;
+  }
 }
 
 function errEnvelopeFromError(err) {

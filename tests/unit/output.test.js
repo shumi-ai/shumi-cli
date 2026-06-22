@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resolveMode, renderOk, renderErr } from '../../src/lib/output.js';
+import { resolveMode, renderOk, renderErr, hintForError } from '../../src/lib/output.js';
 import { Exit } from '../../src/lib/exitCodes.js';
 
 function captureStream(name) {
@@ -75,5 +75,40 @@ describe('renderErr', () => {
   it('falls back to INTERNAL for unstructured errors', () => {
     renderErr(new Error('oops'), { json: true });
     expect(process.exitCode).toBe(Exit.INTERNAL);
+  });
+});
+
+describe('hintForError', () => {
+  const env = (code, message = '', details) => ({
+    schemaVersion: 1,
+    error: { code, message, ...(details && { details }) },
+  });
+
+  it('free-tier rate limit names the quota and the plan page', () => {
+    const h = hintForError(env('RATE_LIMITED', 'Quota exceeded (3/3 on free)', { tier: 'free', used: 3, limit: 3 }));
+    expect(h).toContain('3/3');
+    expect(h).toContain('https://shumi.ai');
+  });
+
+  it('generic rate limit (no tier details) still gives a next step', () => {
+    const h = hintForError(env('RATE_LIMITED', 'Too many requests'));
+    expect(h).toMatch(/retry|plan/i);
+  });
+
+  it('does not double up when message already says "shumi login"', () => {
+    expect(hintForError(env('AUTH_REQUIRED', 'Authentication required. Run: shumi login'))).toBeNull();
+  });
+
+  it('adds a login hint when the auth message lacks it', () => {
+    expect(hintForError(env('AUTH_INVALID', 'token expired'))).toMatch(/shumi login/);
+  });
+
+  it('returns null for codes without a defined hint', () => {
+    expect(hintForError(env('INTERNAL', 'boom'))).toBeNull();
+  });
+
+  it('never invents a pricing deep-link — only the verified home URL', () => {
+    const h = hintForError(env('RATE_LIMITED', 'x', { tier: 'free', used: 3, limit: 3 }));
+    expect(h).not.toMatch(/shumi\.ai\/(pricing|upgrade|checkout|plans?)/);
   });
 });
