@@ -31,7 +31,8 @@ program
   .option('--agent', 'machine mode: JSON output, no spinner, no color, no update notifier')
   .option('--no-color', 'disable colored output')
   .option('--fields <list>', 'comma-separated top-level keys to keep (filter response)')
-  .option('--top <n>', 'keep first N items if response is an array', (v) => parseInt(v, 10));
+  .option('--top <n>', 'keep first N items if response is an array', (v) => parseInt(v, 10))
+  .option('--auto-pay', 'pay x402 paywalls without confirmation (use up to SHUMI_MAX_PRICE_USDC = $0.10 default)');
 
 registerCommands(program);
 

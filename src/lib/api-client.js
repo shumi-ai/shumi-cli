@@ -1,4 +1,23 @@
 import { API_URL, KEYS_URL, getDeviceId, getToken, getWalletAddress } from './config.js';
+import { fetchWithX402, consumeLastPaymentMeta } from './x402-client.js';
+
+/**
+ * Merge the most recent x402 payment metadata (if any) into a response body
+ * so agents/scripts can see what they were charged for this call. We attach
+ * under `meta.payment` to follow the envelope shape the server emits
+ * (`{ data, meta: { route } }`); NLP responses with no `meta` get a fresh one.
+ *
+ * Non-mutating: clones via spread. No-op when there was no payment this call
+ * (consumeLastPaymentMeta() returned null).
+ */
+function attachPaymentMeta(body) {
+  const payment = consumeLastPaymentMeta();
+  if (!payment || body == null || typeof body !== 'object') return body;
+  return {
+    ...body,
+    meta: { ...(body.meta || {}), payment },
+  };
+}
 
 const TYPED_BASE = API_URL; // already .../api/cli — typed routes nest under it
 const TYPED_TIMEOUT_MS = 60_000;
@@ -27,12 +46,21 @@ export async function apiGet(path, query = {}) {
 
   let response;
   try {
-    response = await fetch(url, {
+    // fetchWithX402 transparently handles 402 → sign → retry. For non-402
+    // responses (including the regular 200 case and other errors) it
+    // returns the original response untouched, so this is a one-line swap.
+    response = await fetchWithX402(url, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` },
       signal: AbortSignal.timeout(TYPED_TIMEOUT_MS),
     });
   } catch (err) {
+    // Payment-blocked errors carry .category='PAYMENT_BLOCKED' and a useful
+    // .hint; we surface those as a structured ApiError so the renderer can
+    // print the hint cleanly and exit with code 3 (rate-limited family).
+    if (err?.category === 'PAYMENT_BLOCKED') {
+      throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
+    }
     throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
   }
 
@@ -41,7 +69,7 @@ export async function apiGet(path, query = {}) {
   try { body = text ? JSON.parse(text) : null; } catch { body = { error: { code: 'INTERNAL', message: text || 'invalid response' } }; }
 
   if (!response.ok) throw new ApiError(response.status, body);
-  return body;
+  return attachPaymentMeta(body);
 }
 
 export async function query({ messages, raw = false, archetype = 'base', commandContext = null }) {
@@ -64,12 +92,20 @@ export async function query({ messages, raw = false, archetype = 'base', command
   if (walletAddress) body.walletAddress = walletAddress;
   if (commandContext) body.commandContext = commandContext;
 
-  const response = await fetch(`${API_URL}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(300000),
-  });
+  let response;
+  try {
+    response = await fetchWithX402(`${API_URL}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(300000),
+    });
+  } catch (err) {
+    if (err?.category === 'PAYMENT_BLOCKED') {
+      throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     // Read body once as text, then try to parse as JSON
@@ -94,7 +130,8 @@ export async function query({ messages, raw = false, archetype = 'base', command
     throw new ApiError(response.status, errorBody);
   }
 
-  return response.json();
+  const json = await response.json();
+  return attachPaymentMeta(json);
 }
 
 export async function createKey(name) {
