@@ -154,6 +154,19 @@ Set `SHUMI_TOKEN=shumi_sk_...` in environments without a browser. Credentials ar
 
 - Node.js 20+
 
+## Releasing
+
+Releases publish to npm automatically via GitHub Actions OIDC Trusted Publishing
+(no token). Bump `version` in `package.json`, then:
+
+```bash
+git commit -am "chore(release): shumi-cli X.Y.Z"
+git tag vX.Y.Z          # must match package.json version
+git push --follow-tags  # triggers .github/workflows/publish.yml
+```
+
+Full runbook: [CLAUDE.md](CLAUDE.md#releasing--bumping-the-cli-version).
+
 ## License
 
 MIT
