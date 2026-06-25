@@ -19,11 +19,36 @@ export function registerAuthCommands(program) {
       console.log('Opening browser for authentication...');
       const spinner = ora({ text: 'waiting for authentication...', spinner: 'dots' }).start();
 
+      // After ~30s, nudge the user toward the browser tab — that's where the
+      // sign-in actually happens, and where people tend to get stuck.
+      const hintTimer = setTimeout(() => {
+        spinner.text = 'waiting for authentication... finish sign-in in the browser tab';
+      }, 30000);
+
       try {
-        const { walletAddress } = await login();
+        const { walletAddress } = await login({
+          onUrl: (url) => {
+            spinner.stop();
+            console.log(`If the browser didn't open, visit this URL:\n  ${chalk.cyan(url)}`);
+            spinner.start();
+          },
+        });
+        clearTimeout(hintTimer);
         spinner.succeed(`Authenticated as ${truncate(walletAddress)}`);
       } catch (error) {
-        spinner.fail(error.message);
+        clearTimeout(hintTimer);
+        if (error.timedOut) {
+          spinner.fail('Authentication timed out.');
+          console.log('');
+          console.log("Sign-in happens in the browser tab. If it didn't complete, common causes are:");
+          console.log(`  ${chalk.dim('•')} a privacy/ad blocker or VPN blocking app.dynamic.xyz`);
+          console.log(`  ${chalk.dim('•')} the wallet connection wasn't finished`);
+          console.log(`  ${chalk.dim('•')} the connected wallet doesn't hold SHUMI`);
+          console.log('');
+          console.log(`Re-run ${chalk.cyan('shumi login')} and connect the wallet that holds your SHUMI.`);
+        } else {
+          spinner.fail(error.message);
+        }
         process.exitCode = 1;
       }
     });

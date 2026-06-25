@@ -8,8 +8,13 @@ const AUTH_URL = 'https://shumi.ai/auth/cli';
 /**
  * Start a temporary localhost server, open browser for auth,
  * wait for callback with token + wallet.
+ *
+ * @param {object} [options]
+ * @param {(url: string) => void} [options.onUrl] - called with the auth URL
+ *   once the local server is listening, so the caller can print it as a
+ *   manual-paste fallback in case the browser didn't open.
  */
-export async function login() {
+export async function login({ onUrl } = {}) {
   const state = nanoid();
 
   return new Promise((resolve, reject) => {
@@ -80,14 +85,23 @@ export async function login() {
     server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       const authUrl = `${AUTH_URL}?state=${state}&port=${port}`;
-      open(authUrl);
+      // Surface the URL so the user can paste it manually if the browser
+      // didn't open (headless box, default-browser misconfig, etc.).
+      if (typeof onUrl === 'function') onUrl(authUrl);
+      open(authUrl).catch(() => {
+        // open() rejects when no browser could be launched; the printed URL
+        // above is the fallback, so swallow and keep waiting.
+      });
     });
 
-    // Timeout after 2 minutes
+    // Timeout after 2 minutes. This must stay >= the browser page's own 25s
+    // watchdog so the browser can show its specific error first.
     timeoutId = setTimeout(() => {
       if (!settled) {
         cleanup();
-        reject(new Error('Authentication timed out. Please try again.'));
+        const err = new Error('Authentication timed out — no response from the browser.');
+        err.timedOut = true;
+        reject(err);
       }
     }, 120000);
   });
