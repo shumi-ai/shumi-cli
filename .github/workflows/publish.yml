@@ -1,0 +1,57 @@
+name: publish
+
+# Publishes to npm on a version tag (e.g. v0.4.2) using npm Trusted Publishing
+# (OIDC) — no NPM_TOKEN secret. Requires a trusted publisher registered for the
+# `shumi` package on npmjs.com pointing at this repo + this workflow filename.
+#
+# Release flow:
+#   1. bump "version" in package.json
+#   2. git commit + git tag vX.Y.Z + git push --follow-tags
+#   3. this workflow runs: install → test → verify tag == version → npm publish
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Least privilege: id-token lets GitHub mint the OIDC token npm verifies.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: yarn
+
+      # OIDC Trusted Publishing needs npm >= 11.5.1; the bundled npm is older.
+      - name: Update npm for OIDC publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Test
+        run: yarn test
+
+      # Guard against tagging a version that doesn't match package.json.
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      # No token: npm exchanges the OIDC id-token with the registry's trusted
+      # publisher and auto-generates provenance.
+      - name: Publish to npm
+        run: npm publish
