@@ -19,6 +19,7 @@ import { registerBillingCommand } from './commands/billing.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerVersionCommand } from './commands/version.js';
 import { registerCommandsCommand } from './commands/commands.js';
+import { registerHelpCommand } from './commands/help.js';
 import { registerFuturesCommand } from './commands/futures.js';
 import { registerWalkforwardCommand } from './commands/walkforward.js';
 import { registerPairsCommand } from './commands/pairs.js';
@@ -70,6 +71,7 @@ export function registerCommands(program) {
   registerDoctorCommand(program);
   registerVersionCommand(program);
   registerCommandsCommand(program);
+  registerHelpCommand(program);
 
   // Onboarding (first-run setup check)
   registerInitCommand(program);

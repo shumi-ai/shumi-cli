@@ -3,6 +3,7 @@ import { apiGet } from '../lib/api-client.js';
 import { renderOk, renderErr, spinner, resolveMode } from '../lib/output.js';
 import { withSchema } from '../lib/schema.js';
 import { getToken } from '../lib/config.js';
+import { runSignal } from './signal.js';
 
 /**
  * The default `shumi` invocation (no subcommand) prints a "what's happening
@@ -17,8 +18,18 @@ import { getToken } from '../lib/config.js';
  * that section — never block the whole dashboard.
  */
 export function registerDashboardAction(program) {
-  program.action(async (_options, cmd) => {
+  program
+    .argument('[symbol]', 'coin symbol for a quick signal (e.g. BTC); omit for market overview')
+    .action(async (symbol, _options, cmd) => {
     const opts = cmd.optsWithGlobals();
+
+    // Bare ticker shortcut: `shumi BTC` → quick signal, no subcommand needed.
+    // (Subcommand names take precedence, so `shumi signal`, `shumi help`, etc.
+    // still dispatch normally.)
+    if (symbol) {
+      await runSignal(symbol.toUpperCase(), opts);
+      return;
+    }
 
     // Unauthenticated → fall back to help so first-time users see the surface.
     if (!getToken()) {

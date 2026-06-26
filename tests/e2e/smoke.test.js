@@ -89,3 +89,51 @@ describe('binary smoke', () => {
     expect(() => JSON.parse(stdout)).not.toThrow();
   });
 });
+
+describe('help command', () => {
+  it('shumi help (piped) emits the capability manifest as JSON', async () => {
+    const { stdout, exitCode } = await execa(BIN, ['help']);
+    expect(exitCode).toBe(0);
+    const m = JSON.parse(stdout);
+    expect(m.schemaVersion).toBe(1);
+    expect(m.commands.length).toBeGreaterThan(10);
+  });
+
+  it('shumi help <command> shows that command’s detailed usage', async () => {
+    const { stdout, exitCode } = await execa(BIN, ['help', 'signal']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Usage: shumi signal');
+    expect(stdout).toContain('<symbol>');
+  });
+
+  it('shumi help <unknown> exits non-zero', async () => {
+    const result = await execa(BIN, ['help', 'definitely-not-a-command'], { reject: false });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('Unknown command');
+  });
+});
+
+describe('bare-ticker shortcut', () => {
+  const noAuthEnv = { ...process.env, SHUMI_TOKEN: '', SHUMI_NO_CONFIG: '1', SHUMI_NO_UPDATE_NOTIFIER: '1' };
+
+  it('shumi <TICKER> routes to the signal path (auth-gated like `signal`)', async () => {
+    // Without a token the signal path exits 2 (AUTH_REQUIRED). This proves the
+    // bare ticker dispatches to signal rather than the (token-less) dashboard,
+    // which would instead fall back to help with exit 0.
+    const result = await execa(BIN, ['ZEC', '--agent'], { reject: false, env: noAuthEnv });
+    expect(result.exitCode).toBe(2);
+    const env = JSON.parse(result.stderr.trim().split('\n').pop());
+    expect(env.error.code).toBe('AUTH_REQUIRED');
+  });
+
+  it('lowercase ticker is normalized (shumi zec → ZEC)', async () => {
+    const result = await execa(BIN, ['zec', '--agent'], { reject: false, env: noAuthEnv });
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('no argument does NOT trigger the signal path', async () => {
+    // No token + no arg → dashboard falls back to help (exit 0), not a signal call.
+    const result = await execa(BIN, [], { reject: false, env: noAuthEnv });
+    expect(result.exitCode).toBe(0);
+  });
+});

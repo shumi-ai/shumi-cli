@@ -11,33 +11,40 @@ const VERDICT_COLOR = {
   'strong-bear': chalk.red.bold,
 };
 
+/**
+ * Fetch + render a synthesized signal for one symbol. Shared by the `signal`
+ * command and the bare-ticker shortcut (`shumi BTC`) so both behave identically.
+ */
+export async function runSignal(symbol, opts) {
+  const sp = spinner(`synthesizing signal for ${symbol}…`, opts);
+  try {
+    const env = await apiGet(`signal/${encodeURIComponent(symbol)}`);
+    sp.stop();
+    renderOk(env, opts, (d) => {
+      const color = VERDICT_COLOR[d.verdict] || chalk.dim;
+      process.stdout.write(`\n${chalk.bold(d.symbol)}  ${color(d.verdict.toUpperCase())}  ${chalk.dim(`(score ${d.score}, confidence ${d.confidence})`)}\n`);
+      if (d.as_of) process.stdout.write(chalk.dim(`as of ${d.as_of}\n`));
+      process.stdout.write('\n');
+      for (const line of d.evidence) {
+        process.stdout.write(`  ${chalk.cyan('•')} ${line}\n`);
+      }
+      process.stdout.write('\n');
+      const failed = Object.entries(d.sources).filter(([, s]) => s !== 'fulfilled').map(([k]) => k);
+      if (failed.length) {
+        process.stdout.write(chalk.yellow(`(missing inputs: ${failed.join(', ')} — verdict confidence reduced)\n`));
+      }
+      process.stdout.write(chalk.dim('full bundle: shumi signal ' + d.symbol + ' --json | jq .data.raw\n'));
+    });
+  } catch (err) { sp.stop(); renderErr(err, opts); }
+}
+
 export function registerSignalCommand(program) {
   const cmd = program
     .command('signal')
     .argument('<symbol>', 'coin symbol (e.g. BTC)')
     .description('synthesized verdict for a coin (trend + funding + sentiment + regime)')
     .action(async function (symbol) {
-      const opts = this.optsWithGlobals();
-      const sp = spinner(`synthesizing signal for ${symbol}…`, opts);
-      try {
-        const env = await apiGet(`signal/${encodeURIComponent(symbol)}`);
-        sp.stop();
-        renderOk(env, opts, (d) => {
-          const color = VERDICT_COLOR[d.verdict] || chalk.dim;
-          process.stdout.write(`\n${chalk.bold(d.symbol)}  ${color(d.verdict.toUpperCase())}  ${chalk.dim(`(score ${d.score}, confidence ${d.confidence})`)}\n`);
-          if (d.as_of) process.stdout.write(chalk.dim(`as of ${d.as_of}\n`));
-          process.stdout.write('\n');
-          for (const line of d.evidence) {
-            process.stdout.write(`  ${chalk.cyan('•')} ${line}\n`);
-          }
-          process.stdout.write('\n');
-          const failed = Object.entries(d.sources).filter(([, s]) => s !== 'fulfilled').map(([k]) => k);
-          if (failed.length) {
-            process.stdout.write(chalk.yellow(`(missing inputs: ${failed.join(', ')} — verdict confidence reduced)\n`));
-          }
-          process.stdout.write(chalk.dim('full bundle: shumi signal ' + d.symbol + ' --json | jq .data.raw\n'));
-        });
-      } catch (err) { sp.stop(); renderErr(err, opts); }
+      await runSignal(symbol, this.optsWithGlobals());
     });
 
   withSchema(cmd, {
