@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { login, logout } from '../lib/auth.js';
 import { getToken, getWalletAddress } from '../lib/config.js';
+import { capture, truncWallet } from '../lib/telemetry.js';
 
 export function registerAuthCommands(program) {
   program
@@ -17,6 +18,7 @@ export function registerAuthCommands(program) {
       }
 
       console.log('Opening browser for authentication...');
+      const authStartedAt = Date.now();
       const spinner = ora({ text: 'waiting for authentication...', spinner: 'dots' }).start();
 
       // After ~30s, nudge the user toward the browser tab — that's where the
@@ -35,9 +37,15 @@ export function registerAuthCommands(program) {
         });
         clearTimeout(hintTimer);
         spinner.succeed(`Authenticated as ${truncate(walletAddress)}`);
+        try {
+          capture('auth_success', { wallet_truncated: truncWallet(walletAddress) });
+        } catch { /* telemetry must never affect auth */ }
       } catch (error) {
         clearTimeout(hintTimer);
         if (error.timedOut) {
+          try {
+            capture('auth_timeout', { elapsed_ms: Date.now() - authStartedAt });
+          } catch { /* ignore */ }
           spinner.fail('Authentication timed out.');
           console.log('');
           console.log("Sign-in happens in the browser tab. If it didn't complete, common causes are:");

@@ -1,6 +1,8 @@
 import ora from 'ora';
 import { query } from './api-client.js';
 import { renderText, renderRaw } from './renderer.js';
+import { capture, captureError } from './telemetry.js';
+import { getToken } from './config.js';
 
 // Phase messages that rotate while waiting for the API response.
 // Timings approximate what shumi does server-side.
@@ -16,6 +18,26 @@ const PHASES = [
  */
 export async function execute({ queryText, raw = false, archetype = 'base', commandContext = null }) {
   const startTime = Date.now();
+
+  // Telemetry: shared chokepoint for the NLP commands (coin/ask/signal/tweets/
+  // search). We use commandContext (or archetype) as the command label and
+  // NEVER pass queryText — only metadata (lengths, flags, status, duration).
+  const command = commandContext || 'ask';
+  try {
+    capture('command_invoked', {
+      command,
+      subcommand: null,
+      surface: 'nlp',
+      has_args: typeof queryText === 'string' && queryText.length > 0,
+      flag_keys: [
+        ...(raw ? ['raw'] : []),
+        ...(archetype && archetype !== 'base' ? ['archetype'] : []),
+      ],
+      is_agent: process.env.SHUMI_AGENT === '1' || process.argv.includes('--agent'),
+      has_token: Boolean(getToken()),
+    });
+  } catch { /* telemetry must never break the command */ }
+
   const spinner = ora({ text: PHASES[0].text, spinner: 'dots' }).start();
 
   // Schedule phase transitions
@@ -36,9 +58,27 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
     } else {
       renderText(result.text);
     }
+    try {
+      capture('command_completed', {
+        command,
+        surface: 'nlp',
+        status: 'ok',
+        duration_ms: Date.now() - startTime,
+      });
+    } catch { /* ignore */ }
   } catch (error) {
     timers.forEach(clearTimeout);
     spinner.fail(error.message);
+    try {
+      capture('command_failed', {
+        command,
+        surface: 'nlp',
+        error_code: error?.body?.error?.code || error?.code,
+        http_status: typeof error?.status === 'number' ? error.status : undefined,
+        duration_ms: Date.now() - startTime,
+      });
+      captureError(error, { command, surface: 'nlp' });
+    } catch { /* ignore */ }
     process.exitCode = 1;
   }
 }

@@ -30,6 +30,16 @@ import {
   USDC_DECIMALS,
 } from './wallet.js';
 import { promptYesNo, promptHidden } from './prompt.js';
+import { capture } from './telemetry.js';
+
+/** Truncate a tx hash / wallet for telemetry — never the full value. */
+function truncHash(h) {
+  return h && typeof h === 'string' ? `${h.slice(0, 10)}…` : null;
+}
+
+function safeCapture(event, props) {
+  try { capture(event, props); } catch { /* telemetry must never affect payment */ }
+}
 
 const X402_VERSION = 1;
 const PRICE_CEILING_DEFAULT_USDC = '0.10';
@@ -93,6 +103,9 @@ function paymentBlocked(reason, hint) {
   err.code = 'RATE_LIMITED';
   err.hint = hint;
   err.reason = reason;
+  // Every payment-block path funnels through here, so this is the single
+  // chokepoint for payment_declined. `reason` is a short, value-free label.
+  safeCapture('payment_declined', { reason });
   return err;
 }
 
@@ -184,6 +197,12 @@ export async function fetchWithX402(input, init = {}) {
 
   const priceUnits = BigInt(selected.maxAmountRequired);
   const priceUsdcStr = baseUnitsToUsdcString(priceUnits);
+  safeCapture('payment_required', {
+    amount_usdc: priceUsdcStr,
+    network: selected.network,
+    route: selected.resource,
+    auto_pay: isAutoPay(),
+  });
   const ceilingUnits = usdcStringToBaseUnits(maxPriceCeilingUsdc());
   if (priceUnits > ceilingUnits) {
     throw paymentBlocked(
@@ -312,6 +331,13 @@ export async function fetchWithX402(input, init = {}) {
       wallet: walletAddress,
       payTo: selected.payTo,
     };
+    safeCapture('payment_completed', {
+      amount_usdc: priceUsdcStr,
+      network: selected.network,
+      route: selected.resource,
+      tx_hash: truncHash(tx),
+      wallet_truncated: truncAddress(walletAddress),
+    });
     if (!isAgentMode()) {
       const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
       process.stderr.write(`💸 Paid $${priceUsdcStr} USDC${txDisplay}\n`);

@@ -78,6 +78,19 @@ export function getWalletAddress() {
   return process.env.SHUMI_WALLET || readConfig().walletAddress || null;
 }
 
+/**
+ * Whether the user has opted out of telemetry via ~/.shumi/config.json
+ * (`telemetry_opt_out: true`). The env-var opt-out (SHUMI_TELEMETRY=0) is
+ * handled separately in the telemetry module. Never throws.
+ */
+export function isTelemetryOptedOut() {
+  try {
+    return readConfig().telemetry_opt_out === true;
+  } catch {
+    return false;
+  }
+}
+
 export function saveCredentials({ token, walletAddress, expiresAt }) {
   const config = readConfig();
   writeConfig({ ...config, token, walletAddress, expiresAt });

@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 import { program } from 'commander';
 import updateNotifier from 'update-notifier';
 import { registerCommands } from '../src/index.js';
+import { initTelemetry, captureError, flush, shutdown } from '../src/lib/telemetry.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -17,10 +18,36 @@ if (isTty && !isAgent && !optOut) {
   updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({ defer: true });
 }
 
-// SIGINT: clean exit so spinners don't leave dangling state.
-process.on('SIGINT', () => {
+// Telemetry (PostHog) — safe no-op if disabled / no key. Must be initialized
+// before any command runs so capture() at the chokepoints has a live client.
+// All of its network I/O is async/background and never touches stdout.
+initTelemetry();
+
+// SIGINT / SIGTERM: clean exit so spinners don't leave dangling state. Flush
+// telemetry best-effort (bounded by its own hard timeout) before exiting.
+async function handleSignal(code) {
   process.stderr.write('\n');
-  process.exit(130);
+  await flush();
+  process.exit(code);
+}
+process.on('SIGINT', () => { handleSignal(130); });
+process.on('SIGTERM', () => { handleSignal(143); });
+
+// Last-resort error hooks: record the crash, flush best-effort, then preserve
+// the real exit behavior (non-zero exit). We do NOT swallow the error.
+process.on('unhandledRejection', (reason) => {
+  captureError(reason instanceof Error ? reason : new Error(String(reason)), { hook: 'unhandledRejection' });
+  flush().finally(() => {
+    process.stderr.write(`shumi: unhandled rejection: ${reason?.message || reason}\n`);
+    process.exit(1);
+  });
+});
+process.on('uncaughtException', (err) => {
+  captureError(err, { hook: 'uncaughtException' });
+  flush().finally(() => {
+    process.stderr.write(`shumi: uncaught exception: ${err?.message || err}\n`);
+    process.exit(1);
+  });
 });
 
 program
@@ -36,7 +63,19 @@ program
 
 registerCommands(program);
 
-program.parseAsync().catch((err) => {
-  process.stderr.write(`shumi: ${err?.message || err}\n`);
-  process.exit(1);
-});
+program
+  .parseAsync()
+  .then(async () => {
+    // Normal completion: flush queued telemetry (bounded so it never hangs).
+    await shutdown();
+    // Force-exit: the PostHog client can leave a pending socket open that keeps
+    // the event loop alive for seconds after our bounded flush resolves. Exit
+    // explicitly, preserving whatever exitCode commands set (default 0).
+    process.exit(process.exitCode ?? 0);
+  })
+  .catch(async (err) => {
+    captureError(err, { hook: 'parse_catch' });
+    await flush();
+    process.stderr.write(`shumi: ${err?.message || err}\n`);
+    process.exit(1);
+  });
