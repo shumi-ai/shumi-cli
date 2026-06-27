@@ -1,6 +1,14 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { createKey, listKeys, revokeKey } from '../lib/api-client.js';
+import { capture } from '../lib/telemetry.js';
+
+/** Emit api_key_lifecycle. Never the key value — action + success only. */
+function captureKeyLifecycle(action, success) {
+  try {
+    capture('api_key_lifecycle', { action, success });
+  } catch { /* telemetry must never affect the command */ }
+}
 
 export function registerKeysCommand(program) {
   const keys = program
@@ -30,8 +38,10 @@ export function registerKeysCommand(program) {
         console.log(chalk.dim('Usage:'));
         console.log(chalk.dim(`  SHUMI_TOKEN=${result.key} shumi coin BTC`));
         console.log('');
+        captureKeyLifecycle('create', true);
       } catch (error) {
         spinner.fail(error.message);
+        captureKeyLifecycle('create', false);
         process.exitCode = 1;
       }
     });
@@ -45,6 +55,8 @@ export function registerKeysCommand(program) {
       try {
         const result = await listKeys();
         spinner.stop();
+
+        captureKeyLifecycle('list', true);
 
         if (!result.keys || result.keys.length === 0) {
           console.log(chalk.dim('No API keys found. Create one with: shumi keys create'));
@@ -68,6 +80,7 @@ export function registerKeysCommand(program) {
         console.log('');
       } catch (error) {
         spinner.fail(error.message);
+        captureKeyLifecycle('list', false);
         process.exitCode = 1;
       }
     });
@@ -82,8 +95,10 @@ export function registerKeysCommand(program) {
       try {
         await revokeKey(prefix);
         spinner.succeed(`Key ${chalk.cyan(prefix)} revoked`);
+        captureKeyLifecycle('revoke', true);
       } catch (error) {
         spinner.fail(error.message);
+        captureKeyLifecycle('revoke', false);
         process.exitCode = 1;
       }
     });

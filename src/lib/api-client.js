@@ -1,5 +1,16 @@
 import { API_URL, KEYS_URL, getDeviceId, getToken, getWalletAddress } from './config.js';
 import { fetchWithX402, consumeLastPaymentMeta } from './x402-client.js';
+import { capture } from './telemetry.js';
+
+/**
+ * Emit an api_request_completed event. Route is the path segment only (never
+ * the full URL, which can carry tokens/query values). Never throws.
+ */
+function captureApiRequest(route, status, elapsedMs) {
+  try {
+    capture('api_request_completed', { route, status, elapsed_ms: elapsedMs });
+  } catch { /* telemetry must never affect the request */ }
+}
 
 /**
  * Merge the most recent x402 payment metadata (if any) into a response body
@@ -36,10 +47,15 @@ export class ApiError extends Error {
  * Throws ApiError on non-2xx. Token is required (typed surface = paid surface).
  */
 export async function apiGet(path, query = {}) {
+  const route = String(path).replace(/^\//, ''); // path only — never the full URL
+  const startedAt = Date.now();
   const token = getToken();
-  if (!token) throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
+  if (!token) {
+    captureApiRequest(route, 401, Date.now() - startedAt);
+    throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
+  }
 
-  const url = new URL(`${TYPED_BASE}/${path.replace(/^\//, '')}`);
+  const url = new URL(`${TYPED_BASE}/${route}`);
   for (const [k, v] of Object.entries(query)) {
     if (v !== undefined && v !== null && v !== false) url.searchParams.set(k, String(v));
   }
@@ -59,10 +75,14 @@ export async function apiGet(path, query = {}) {
     // .hint; we surface those as a structured ApiError so the renderer can
     // print the hint cleanly and exit with code 3 (rate-limited family).
     if (err?.category === 'PAYMENT_BLOCKED') {
+      captureApiRequest(route, 402, Date.now() - startedAt);
       throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
     }
+    captureApiRequest(route, 0, Date.now() - startedAt);
     throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
   }
+
+  captureApiRequest(route, response.status, Date.now() - startedAt);
 
   const text = await response.text();
   let body;
@@ -73,6 +93,8 @@ export async function apiGet(path, query = {}) {
 }
 
 export async function query({ messages, raw = false, archetype = 'base', commandContext = null }) {
+  const startedAt = Date.now();
+  const route = 'nlp'; // POST /api/cli — never the request body (contains prompt)
   const token = getToken();
   const deviceId = getDeviceId();
   const walletAddress = getWalletAddress();
@@ -102,10 +124,14 @@ export async function query({ messages, raw = false, archetype = 'base', command
     });
   } catch (err) {
     if (err?.category === 'PAYMENT_BLOCKED') {
+      captureApiRequest(route, 402, Date.now() - startedAt);
       throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
     }
+    captureApiRequest(route, 0, Date.now() - startedAt);
     throw err;
   }
+
+  captureApiRequest(route, response.status, Date.now() - startedAt);
 
   if (!response.ok) {
     // Read body once as text, then try to parse as JSON

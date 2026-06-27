@@ -1,6 +1,28 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
+import { captureError } from './telemetry.js';
+
+/**
+ * Decide whether an error is a real fault worth capturing (5xx, network,
+ * internal/parse) vs. routine user-gating noise (401/403/429, payment blocks)
+ * that is a product event, not an error. Never throws.
+ */
+function shouldCaptureError(err) {
+  try {
+    const status = typeof err?.status === 'number' ? err.status : null;
+    if (status === 401 || status === 403 || status === 429 || status === 402) return false;
+    if (err?.category === 'PAYMENT_BLOCKED') return false;
+    const code = err?.envelope?.error?.code || err?.body?.error?.code || err?.code;
+    if (code === 'AUTH_REQUIRED' || code === 'RATE_LIMITED' || code === 'PAYMENT_REQUIRED') return false;
+    if (status === 0 || code === 'NETWORK') return true; // network failure
+    if (status !== null && status >= 500) return true; // upstream 5xx
+    if (status === null) return true; // no HTTP status → internal/unexpected
+    return false; // other 4xx are user errors, not faults
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Centralized output policy.
@@ -50,6 +72,11 @@ export function renderOk(envelope, opts = {}, human) {
 export function renderErr(err, opts = {}) {
   const mode = resolveMode(opts);
   const envelope = errEnvelopeFromError(err);
+  if (shouldCaptureError(err)) {
+    try {
+      captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
+    } catch { /* telemetry must never affect error rendering */ }
+  }
   process.stderr.write(JSON.stringify(envelope) + '\n');
   if (!mode.json && !mode.agent) {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));

@@ -47,6 +47,7 @@
     "nanoid": "^5.0.9",
     "open": "^10.1.0",
     "ora": "^8.1.1",
+    "posthog-node": "^5.38.6",
     "update-notifier": "^7.3.1",
     "viem": "^2.52.2",
     "x402-fetch": "^1.2.0"

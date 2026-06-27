@@ -1,6 +1,33 @@
 import { apiGet } from './api-client.js';
 import { renderOk, renderErr, spinner } from './output.js';
 import { smartFormat } from './smartFormat.js';
+import { capture, captureError } from './telemetry.js';
+import { getToken } from './config.js';
+
+/**
+ * Resolve the agent-mode flag the same way output.js does, without writing to
+ * stdout. Used only to tag telemetry events.
+ */
+function resolveIsAgent(opts) {
+  return Boolean(opts?.agent) || process.env.SHUMI_AGENT === '1' || process.argv.includes('--agent');
+}
+
+/**
+ * Best-effort, never-throws derivation of the command + subcommand names from a
+ * Commander command instance. Returns names only (never argument values).
+ */
+function commandNames(cmd) {
+  try {
+    const name = cmd?.name?.() || 'unknown';
+    const parent = cmd?.parent;
+    // A subcommand has a parent that is itself a real command (not the program).
+    const isSub = parent && typeof parent.name === 'function' && parent.parent;
+    if (isSub) return { command: parent.name(), subcommand: name };
+    return { command: name, subcommand: null };
+  } catch {
+    return { command: 'unknown', subcommand: null };
+  }
+}
 
 /**
  * Build a Commander action handler for typed endpoints.
@@ -28,14 +55,48 @@ export function typedAction({ route, query, spinner: spinnerText, human }) {
     const q = typeof query === 'function' ? query(ctx, opts) : (query || {});
     const sp = typeof spinnerText === 'function' ? spinnerText(ctx, opts) : (spinnerText || `${r}…`);
 
+    // Telemetry: single chokepoint for all typed commands. Flag names only,
+    // never values; never any query/argument content. Wrapped so a telemetry
+    // issue can't affect the command (capture itself is also internally safe).
+    const { command, subcommand } = commandNames(cmd);
+    const startedAt = Date.now();
+    try {
+      capture('command_invoked', {
+        command,
+        subcommand,
+        has_args: Array.isArray(cmdArgs) && cmdArgs.some((a) => a != null && a !== ''),
+        flag_keys: Object.keys(localOpts || {}),
+        is_agent: resolveIsAgent(opts),
+        has_token: Boolean(getToken()),
+      });
+    } catch { /* telemetry must never break the command */ }
+
     const s = spinner(sp, opts);
     try {
       const env = await apiGet(r, q);
       s.stop();
       const filtered = applyClientFilters(env, opts);
       renderOk(filtered, opts, human || ((data, chalk) => smartFormat(data, chalk, opts)));
+      try {
+        capture('command_completed', {
+          command,
+          subcommand,
+          status: 'ok',
+          duration_ms: Date.now() - startedAt,
+        });
+      } catch { /* ignore */ }
     } catch (err) {
       s.stop();
+      try {
+        capture('command_failed', {
+          command,
+          subcommand,
+          error_code: err?.body?.error?.code || err?.code,
+          http_status: typeof err?.status === 'number' ? err.status : undefined,
+          duration_ms: Date.now() - startedAt,
+        });
+        captureError(err, { command, subcommand, surface: 'typed_command' });
+      } catch { /* ignore */ }
       renderErr(err, opts);
     }
   };

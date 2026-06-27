@@ -636,6 +636,18 @@
     "@pnpm/network.ca-file" "^1.0.1"
     config-chain "^1.1.11"
 
+"@posthog/core@^1.38.0":
+  version "1.38.0"
+  resolved "https://registry.yarnpkg.com/@posthog/core/-/core-1.38.0.tgz#595a32d1ad59945eae6f83538c94852f214685d2"
+  integrity sha512-QLrJh0hMVpEJXHNyiJR9YhvIO5tzLDedw4UHdvB+ub4fXHMtHCA8H44qgl11HWR3ajpjxtJ8hs3HyOGVF3Zc1w==
+  dependencies:
+    "@posthog/types" "^1.391.1"
+
+"@posthog/types@^1.391.1":
+  version "1.391.1"
+  resolved "https://registry.yarnpkg.com/@posthog/types/-/types-1.391.1.tgz#8d616ede20dead87451192e6036135a558311c9b"
+  integrity sha512-ASwd7Nf4pViqdYRYaNRyPYRVKWa1CcHUAUWR0XeQJLGdNnsWACBwe0sSieb/cHnKsRXjRwO/23KIY83lm/Ccpw==
+
 "@reown/appkit-common@1.7.8":
   version "1.7.8"
   resolved "https://registry.yarnpkg.com/@reown/appkit-common/-/appkit-common-1.7.8.tgz#6fc29db977b7325e8170b1fd08176fe15ea0b39c"
@@ -3811,6 +3823,13 @@ postcss@^8.4.43:
     nanoid "^3.3.11"
     picocolors "^1.1.1"
     source-map-js "^1.2.1"
+
+posthog-node@^5.38.6:
+  version "5.38.6"
+  resolved "https://registry.yarnpkg.com/posthog-node/-/posthog-node-5.38.6.tgz#c0127620123bc86c0340b6dc36f3533a450958de"
+  integrity sha512-Sm2mCAa9/lTTYppnKyy0AhQrriq8fOd8B2vwd3EE/9uihyIx9qkJ1xGYbvADxQJlF7HqM1/TIFCKsI0JvF8gjQ==
+  dependencies:
+    "@posthog/core" "^1.38.0"
 
 preact@10.24.2:
   version "10.24.2"
