@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { login, logout } from '../lib/auth.js';
 import { getToken, getWalletAddress } from '../lib/config.js';
-import { capture, truncWallet } from '../lib/telemetry.js';
+import { capture, truncWallet, identifyWallet } from '../lib/telemetry.js';
 
 export function registerAuthCommands(program) {
   program
@@ -38,6 +38,9 @@ export function registerAuthCommands(program) {
         clearTimeout(hintTimer);
         spinner.succeed(`Authenticated as ${truncate(walletAddress)}`);
         try {
+          // Stitch the anonymous device session into the wallet person first,
+          // so this and all future events attribute to one cross-surface person.
+          identifyWallet(walletAddress);
           capture('auth_success', { wallet_truncated: truncWallet(walletAddress) });
         } catch { /* telemetry must never affect auth */ }
       } catch (error) {

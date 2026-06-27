@@ -12,9 +12,16 @@
  *   - Safe no-op when disabled: empty API key, SHUMI_TELEMETRY=0/false, or
  *     `telemetry_opt_out: true` in ~/.shumi/config.json fully disables it.
  *
- * distinct_id = the deterministic machine fingerprint (getDeviceId). When a
- * wallet/user is known we attach a truncated wallet address as a property and
- * set it as a person property via `$set`.
+ * Identity model (canonical person id = lowercased wallet address, the same id
+ * the web/Dynamic session identifies by, so one human is one PostHog person
+ * across web + CLI):
+ *   - Logged out: distinct_id = the machine fingerprint (getDeviceId), and every
+ *     event carries `$process_person_profile: false` so no identified person is
+ *     created from the anonymous bootstrap id (matches `identified_only`).
+ *   - On `shumi login`: identifyWallet() aliases the device id into the wallet
+ *     person and identifies as the wallet, folding the anonymous session in.
+ *   - Logged in: distinct_id = the wallet; a truncated wallet is also kept as a
+ *     person `$set` property for display.
  *
  * Privacy: callers are responsible for never passing raw query/prompt text,
  * private keys, API-key contents, JWTs, or full token-bearing URLs. This module
@@ -87,11 +94,18 @@ export function initTelemetry() {
   }
 }
 
-/**
- * Anonymous, stable distinct_id for this machine. Falls back to a constant if
- * the fingerprint can't be derived (never throws).
- */
-export function getDistinctId() {
+/** Lowercased wallet address if known, else null. Never throws. */
+function walletId() {
+  try {
+    const w = getWalletAddress();
+    return w && typeof w === 'string' ? w.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The machine fingerprint (anonymous bootstrap id). Never throws. */
+function deviceId() {
   try {
     return getDeviceId() || 'unknown-device';
   } catch {
@@ -100,22 +114,52 @@ export function getDistinctId() {
 }
 
 /**
- * Build the common property/`$set` envelope. Attaches a truncated wallet
- * address (property + person `$set`) when one is known.
+ * Canonical distinct_id: the wallet (lowercased) once logged in — the same id
+ * the web session identifies by — else the machine fingerprint.
+ */
+export function getDistinctId() {
+  return walletId() || deviceId();
+}
+
+/**
+ * Build the common property/`$set` envelope. When logged in, attaches a
+ * truncated wallet for display. When logged out, marks the event
+ * `$process_person_profile: false` so the anonymous device id doesn't create a
+ * standalone identified person that could never merge with the wallet.
  */
 function baseProps(extra = {}) {
   const props = { source: 'cli', ...extra };
-  try {
-    const wallet = getWalletAddress();
+  const wallet = walletId();
+  if (wallet) {
     const tw = truncWallet(wallet);
     if (tw) {
       props.wallet_truncated = tw;
       props.$set = { ...(props.$set || {}), wallet_truncated: tw };
     }
-  } catch {
-    // ignore — wallet is optional context
+  } else {
+    props.$process_person_profile = false;
   }
   return props;
+}
+
+/**
+ * Stitch the anonymous device session into the wallet person, then identify as
+ * the wallet. Call once on successful `shumi login`. Fire-and-forget.
+ */
+export function identifyWallet(wallet) {
+  try {
+    if (!initialized) initTelemetry();
+    if (!enabled || !client) return;
+    const w = wallet && typeof wallet === 'string' ? wallet.toLowerCase() : null;
+    if (!w) return;
+    const dev = deviceId();
+    captured = true;
+    // alias: events from the anonymous device id now belong to the wallet person.
+    if (dev && dev !== w) client.alias({ distinctId: w, alias: dev });
+    client.identify({ distinctId: w, properties: { $set: { wallet_truncated: truncWallet(w) } } });
+  } catch {
+    // swallow — telemetry must never affect auth
+  }
 }
 
 /**
