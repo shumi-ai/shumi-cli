@@ -147,7 +147,12 @@ export async function query({ messages, raw = false, archetype = 'base', command
       throw new ApiError(401, { error: 'Authentication required. Run: shumi login' });
     }
     if (response.status === 429) {
-      throw new ApiError(429, { error: 'Rate limit exceeded. Please try again later.' });
+      // Surface the server's ACTUAL reason. The server distinguishes two very
+      // different 429s: the per-IP burst limiter ("Rate limit exceeded…") and a
+      // tier quota ("Quota exceeded (3/3 on free)…"). Hard-coding the former hid
+      // quota/wrong-account problems for days — a free-tier session looked like
+      // an IP rate limit. Fall back to the generic text only if the body is empty.
+      throw new ApiError(429, { error: errorBody?.error || 'Rate limit exceeded. Please try again later.' });
     }
     if (response.status === 403) {
       throw new ApiError(403, { error: 'Free query used. Sign in to continue: shumi login' });
