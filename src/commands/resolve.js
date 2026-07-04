@@ -25,10 +25,11 @@ export function registerResolveCommand(program) {
           return;
         }
         renderOk(env, opts, (data) => {
-          process.stdout.write('symbol      name                          via              rank\n');
+          process.stdout.write('symbol      name                          type         via              rank\n');
           for (const m of data.matches) {
-            process.stdout.write(`${pad(m.symbol, 11)} ${pad(m.name, 29)} ${pad(m.via, 16)} ${m.rank ?? '—'}\n`);
+            process.stdout.write(`${pad(m.symbol, 11)} ${pad(m.name, 29)} ${pad(m.assetType || 'crypto', 12)} ${pad(m.via, 16)} ${m.rank ?? '—'}\n`);
           }
+          if (data.note) process.stdout.write(chalk.yellow(`note: ${data.note}\n`));
         });
       } catch (err) { sp.stop(); renderErr(err, opts); }
     });
@@ -38,8 +39,9 @@ export function registerResolveCommand(program) {
     fields: {
       query: 'string (input)',
       tried: 'string[] (resolution strategies attempted)',
-      matches: 'array of { id, symbol, name, rank, via, score }',
+      matches: 'array of { id, symbol, name, assetType, rank, via, score }',
       count: 'number',
+      note: 'string (present when crypto and RWA candidates share the ticker)',
     },
     example: { query: 'wif', matches: [{ symbol: 'WIF', name: 'dogwifhat', via: 'symbol-exact', score: 1.0, rank: 42 }] },
   });
