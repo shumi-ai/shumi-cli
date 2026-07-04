@@ -1,5 +1,6 @@
 import { registerAskCommand } from './commands/ask.js';
 import { registerCoinCommand } from './commands/coin.js';
+import { registerRwaCommand } from './commands/rwa.js';
 import { registerMarketCommand } from './commands/market.js';
 import { registerSentimentCommand } from './commands/sentiment.js';
 import { registerTrendsCommand } from './commands/trends.js';
@@ -42,6 +43,7 @@ export function registerCommands(program) {
 
   // Coin / market parents (NLP default + typed subcommands)
   registerCoinCommand(program);
+  registerRwaCommand(program);
   registerMarketCommand(program);
 
   // Typed data domains
