@@ -58,7 +58,9 @@ export function registerFundingCommand(program) {
   });
 }
 
-function pct(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
-  return `${(Number(n) * 100).toFixed(2)}%`;
+export function formatPercentUnits(n) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
+  return `${Number(n).toFixed(2)}%`;
 }
+
+const pct = formatPercentUnits;

@@ -3,6 +3,7 @@ import { renderOk, renderErr, spinner } from '../lib/output.js';
 import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 import { withSchema } from '../lib/schema.js';
 import { smartFormat } from '../lib/smartFormat.js';
+import { formatPercentUnits } from './funding.js';
 
 /**
  * Registers coin subcommands: risk, sentiment, historical, by-contract, by-id, by-name, lookup.
@@ -41,6 +42,10 @@ export function registerCoinRiskCommand(coinCmd) {
             symbol: d.symbol,
             price: d.price,
             funding_apr: d.funding_apr,
+            funding_paying_side: d.funding_paying_side,
+            funding_receiving_side: d.funding_receiving_side,
+            carry_if_long: d.carry_if_long,
+            carry_if_short: d.carry_if_short,
             trend_daily: d.trend_daily,
             trend_weekly: d.trend_weekly,
             sentiment: d.sentiment_stance,
@@ -58,8 +63,20 @@ export function registerCoinRiskCommand(coinCmd) {
   addUniversalFlags(risk);
   withSchema(risk, {
     kind: 'object or array',
-    fields: { symbol: 'string', price: 'number', funding_apr: 'number', trend_daily: 'string', trend_weekly: 'string', sentiment_stance: 'string', btc_correlation: 'number' },
-    note: 'single-symbol returns a flat object; multi-symbol returns an array, one row per symbol',
+    fields: {
+      symbol: 'string',
+      price: 'number',
+      funding_apr: 'number — annualized rate in percent units (7.4 = 7.4%)',
+      funding_paying_side: 'longs | shorts | null',
+      funding_receiving_side: 'longs | shorts | null',
+      carry_if_long: 'deterministic perpetual-position carry string',
+      carry_if_short: 'deterministic perpetual-position carry string',
+      trend_daily: 'string',
+      trend_weekly: 'string',
+      sentiment_stance: 'string',
+      btc_correlation: 'number',
+    },
+    note: 'Funding applies to perpetual positions only; spot neither pays nor receives it. Single-symbol returns a flat object; multi-symbol returns an array, one row per symbol.',
   });
 
   addUniversalFlags(coinCmd
@@ -120,13 +137,17 @@ export function registerCoinRiskCommand(coinCmd) {
     }));
 }
 
-function renderSingleRisk(envelope) {
+export function renderSingleRisk(envelope) {
   const d = envelope?.data?.data || envelope?.data || envelope;
   if (!d) return process.stdout.write('No data.\n');
   const lines = [
     ['symbol',          d.symbol],
     ['price',           d.price],
-    ['funding APR',     d.funding_apr],
+    ['funding APR',     formatPercentUnits(d.funding_apr)],
+    ['funding pays',    d.funding_paying_side],
+    ['funding receives', d.funding_receiving_side],
+    ['carry if long',   d.carry_if_long],
+    ['carry if short',  d.carry_if_short],
     ['trend (daily)',   `${d.trend_daily || '—'} since ${d.trend_daily_since || '—'}`],
     ['trend (weekly)',  `${d.trend_weekly || '—'} since ${d.trend_weekly_since || '—'}`],
     ['sentiment',       d.sentiment_stance],
