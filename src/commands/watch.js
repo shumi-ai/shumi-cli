@@ -3,6 +3,7 @@ import { API_URL, getToken } from '../lib/config.js';
 import { ApiError } from '../lib/api-client.js';
 import { renderErr, resolveMode } from '../lib/output.js';
 import { withSchema } from '../lib/schema.js';
+import { formatPercentUnits } from './funding.js';
 
 const STREAMS = ['funding', 'regime', 'sentiment'];
 
@@ -150,7 +151,7 @@ function summarizeEvent(data, stream) {
   if (!data) return '(empty)';
   if (stream === 'funding' && data.market) {
     const m = data.market;
-    return `temp=${m.temperature ?? '?'}  avgApr=${fmtPct(m.avgApr)}  +${m.positive ?? '?'}/-${m.negative ?? '?'} of ${m.total ?? '?'}`;
+    return `temp=${m.temperature ?? '?'}  avgApr=${formatPercentUnits(m.avgApr)}  +${m.positive ?? '?'}/-${m.negative ?? '?'} of ${m.total ?? '?'}`;
   }
   if (stream === 'regime' && Array.isArray(data)) {
     return `${data.length} active position${data.length === 1 ? '' : 's'}`;
@@ -160,9 +161,4 @@ function summarizeEvent(data, stream) {
     return stance ? `stance=${String(stance).slice(0, 60)}` : '(sentiment)';
   }
   return JSON.stringify(data).slice(0, 80);
-}
-
-function fmtPct(n) {
-  if (n === null || n === undefined || Number.isNaN(n)) return '—';
-  return `${(Number(n) * 100).toFixed(2)}%`;
 }

@@ -4,6 +4,7 @@ import { renderOk, renderErr, spinner, resolveMode } from '../lib/output.js';
 import { withSchema } from '../lib/schema.js';
 import { getToken } from '../lib/config.js';
 import { runSignal } from './signal.js';
+import { formatPercentUnits } from './funding.js';
 
 /**
  * The default `shumi` invocation (no subcommand) prints a "what's happening
@@ -112,7 +113,7 @@ function renderHuman(d) {
     const tempColor = (m.temperature || '').toLowerCase().includes('hot') ? chalk.red
       : (m.temperature || '').toLowerCase().includes('cool') ? chalk.cyan
       : chalk.yellow;
-    process.stdout.write(`  market temp ${tempColor(m.temperature || '—')}  avg APR ${fmtPct(m.avgApr)}  ${chalk.green('+'+(m.positive ?? '?'))}/${chalk.red('-'+(m.negative ?? '?'))} of ${m.total ?? '?'}\n`);
+    process.stdout.write(`  market temp ${tempColor(m.temperature || '—')}  avg APR ${formatPercentUnits(m.avgApr)}  ${chalk.green('+'+(m.positive ?? '?'))}/${chalk.red('-'+(m.negative ?? '?'))} of ${m.total ?? '?'}\n`);
   }
 
   // Regime block
@@ -153,9 +154,4 @@ function formatPrice(p) {
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   if (n >= 1)    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return '$' + n.toPrecision(4);
-}
-
-function fmtPct(n) {
-  if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
-  return `${(Number(n) * 100).toFixed(2)}%`;
 }
