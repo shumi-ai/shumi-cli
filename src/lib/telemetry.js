@@ -128,7 +128,11 @@ export function getDistinctId() {
  * standalone identified person that could never merge with the wallet.
  */
 function baseProps(extra = {}) {
-  const props = { source: 'cli', ...extra };
+  // `surface` is the canonical cross-surface tag (all Shumi surfaces share one
+  // PostHog project + key), so it's the property to group/filter by in insights.
+  // Peer surfaces: 'coinrotator' / 'shumi-landing' (web), 'api' (coinrotator-ai
+  // backend), 'mcp' (shumi-mcp).
+  const props = { surface: 'cli', ...extra };
   const wallet = walletId();
   if (wallet) {
     const tw = truncWallet(wallet);
