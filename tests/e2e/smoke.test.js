@@ -85,7 +85,10 @@ describe('binary smoke', () => {
   it('unknown command exits 1 (USER_ERROR) with a BAD_REQUEST envelope, not a silent dashboard', async () => {
     // Regression: Commander routed unknown commands to the default dashboard
     // action — exit 0 + a metered fan-out. Guard must reject before auth/network.
-    const result = await execa(BIN, ['boguscmd', '--agent'], {
+    //
+    // Two operands, because one operand is the bare-ticker shortcut (`shumi BTC`)
+    // and is therefore not decidable as a bad command without asking the server.
+    const result = await execa(BIN, ['boguscmd', 'extra', '--agent'], {
       reject: false,
       env: { ...process.env, SHUMI_TOKEN: '', SHUMI_NO_CONFIG: '1', SHUMI_NO_UPDATE_NOTIFIER: '1' },
     });
@@ -94,6 +97,19 @@ describe('binary smoke', () => {
     const env = JSON.parse(result.stderr.trim().split('\n').pop());
     expect(env.error.code).toBe('BAD_REQUEST');
     expect(env.error.message).toContain('boguscmd');
+  });
+
+  it('a single unknown token still never exits 0 into the dashboard fan-out', async () => {
+    // The half the >1 guard cannot catch: `shumi boguscmd` is shaped exactly like
+    // `shumi BTC`, so it routes to the signal path rather than BAD_REQUEST. What
+    // must hold is the actual regression this all guards — it must not exit 0
+    // having silently run the metered dashboard.
+    const result = await execa(BIN, ['boguscmd', '--agent'], {
+      reject: false,
+      env: { ...process.env, SHUMI_TOKEN: '', SHUMI_NO_CONFIG: '1', SHUMI_NO_UPDATE_NOTIFIER: '1' },
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe('');
   });
 
   it('piped (non-TTY) output is JSON without --json flag', async () => {
