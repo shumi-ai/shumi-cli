@@ -218,8 +218,17 @@ function formatNumber(n, key) {
   if (k.includes('price') || k === 'priceusd' || k === 'usd') {
     return formatPrice(n);
   }
+  // Fraction-unit fields carry 0..1 values (winRate 0.47, percentile 0.65) —
+  // render as whole percent so 0.47 shows "47%", not "0.47%". Checked BEFORE
+  // the percent-unit branch since these names also match `includes('rate')`.
+  // NO directional color: win-rate/accuracy aren't funding-signed, so the
+  // funding red/green thresholds would invert the meaning (a 90% win rate is
+  // good but would render red).
+  if (k === 'winrate' || k === 'win_rate' || k === 'percentile' || k === 'hitrate' || k === 'hit_rate' || k === 'accuracy') {
+    return (n * 100).toFixed(2) + '%';
+  }
   // Percent-like fields (already in percent units like funding.apr=1.7 = 1.7%)
-  if (k.includes('apr') || k.includes('pct') || k === 'percentile' || k.includes('rate')) {
+  if (k.includes('apr') || k.includes('pct') || k.includes('rate')) {
     return formatPctMaybeColored(n);
   }
   // Market cap / volume / OI — big-number compact format
@@ -264,7 +273,7 @@ function formatString(s, key) {
   return s;
 }
 
-function formatPrice(n) {
+export function formatPrice(n) {
   if (n >= 1000)  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   if (n >= 1)     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (n >= 0.01)  return '$' + n.toFixed(4);
@@ -290,7 +299,7 @@ function formatBigNumber(n) {
   return n.toString();
 }
 
-function formatRelative(s) {
+export function formatRelative(s) {
   if (s < 60) return `${Math.round(s)}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;

@@ -1,5 +1,6 @@
 import { apiGet } from '../lib/api-client.js';
 import { renderOk, renderErr, spinner } from '../lib/output.js';
+import { smartFormat } from '../lib/smartFormat.js';
 
 export function registerRegimeCommand(program) {
   const regime = program
@@ -31,7 +32,7 @@ export function registerRegimeCommand(program) {
       try {
         const env = await apiGet('regime', { action: 'history', symbol });
         sp.stop();
-        renderOk(env, opts, (d) => process.stdout.write(JSON.stringify(d, null, 2) + '\n'));
+        renderOk(env, opts, (d, chalk) => smartFormat(d, chalk, opts));
       } catch (err) { sp.stop(); renderErr(err, opts); }
     });
 }
@@ -43,7 +44,7 @@ function action(name) {
     try {
       const env = await apiGet('regime', { action: name });
       sp.stop();
-      renderOk(env, opts, (d) => process.stdout.write(JSON.stringify(d, null, 2) + '\n'));
+      renderOk(env, opts, (d, chalk) => smartFormat(d, chalk, opts));
     } catch (err) { sp.stop(); renderErr(err, opts); }
   };
 }

@@ -116,8 +116,13 @@ export function renderErr(err, opts = {}) {
       captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
     } catch { /* telemetry must never affect error rendering */ }
   }
-  process.stderr.write(JSON.stringify(envelope) + '\n');
-  if (!mode.json && !mode.agent) {
+  if (mode.json || mode.agent) {
+    // Machine mode only: emit the structured envelope on stderr for parsing.
+    process.stderr.write(JSON.stringify(envelope) + '\n');
+  } else {
+    // Human mode: a raw JSON blob before the friendly line poisons every error
+    // — and the quota/auth errors ARE the paywall moment. Show only the two
+    // actionable lines; machines get the envelope via --json/--agent above.
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
     const hint = hintForError(envelope);
     if (hint) process.stderr.write(chalk.yellow(`→ ${hint}\n`));
@@ -137,11 +142,23 @@ export function hintForError(envelope) {
   const msg = envelope?.error?.message || '';
   const d = envelope?.error?.details || {};
   switch (code) {
-    case 'RATE_LIMITED':
-      if (d.tier === 'free' && d.limit != null) {
-        return `Free tier limit reached (${d.used}/${d.limit}). Manage your plan at https://shumi.ai`;
+    case 'RATE_LIMITED': {
+      // Enriched gate payload (server >= gate-payload PR): quota.wall + reset_at
+      // + upgrade_url. Falls back cleanly to the flat used/limit shape older
+      // servers send. No em-dashes (published-copy rule).
+      const q = d.quota || {};
+      const url = d.upgrade_url || 'https://shumi.ai';
+      if (d.tier === 'free') {
+        const cap = d.limit ?? q.limit;
+        const usedLine =
+          q.wall === 'grant' ? (cap ? `You have used all ${cap} free queries.` : 'You have used all your free queries.')
+          : q.wall === 'drip' ? "That is today's free query used."
+          : (d.limit != null ? `Free tier limit reached (${d.used}/${d.limit}).` : 'Free tier limit reached.');
+        const resetLine = d.reset_at ? ` Your next free query unlocks ${untilReset(d.reset_at)}.` : '';
+        return `${usedLine}${resetLine} Unlock more at ${url}`;
       }
-      return 'Rate limit hit. Wait a moment and retry, or review your plan at https://shumi.ai';
+      return `Rate limit hit. Wait a moment and retry, or review your plan at ${url}`;
+    }
     case 'AUTH_REQUIRED':
     case 'AUTH_INVALID':
       // The server message usually already says "Run: shumi login" — don't double up.
@@ -180,6 +197,17 @@ function exitCodeFromError(err) {
   if (err?.body?.error?.code) return exitCodeForErrCode(err.body.error.code);
   if (typeof err?.status === 'number') return exitCodeForStatus(err.status);
   return Exit.INTERNAL;
+}
+
+// Human-friendly time until a reset_at ISO timestamp ("in ~7h", "tomorrow").
+function untilReset(iso) {
+  const ms = Date.parse(iso) - Date.now();
+  if (!(ms > 0)) return 'soon';
+  const h = Math.round(ms / 3_600_000);
+  if (h < 1) return 'within the hour';
+  if (h < 24) return `in ~${h}h`;
+  if (h < 48) return 'tomorrow';
+  return `in ~${Math.round(h / 24)}d`;
 }
 
 function codeForStatus(s) {

@@ -76,6 +76,29 @@ describe('renderErr', () => {
     renderErr(new Error('oops'), { json: true });
     expect(process.exitCode).toBe(Exit.INTERNAL);
   });
+
+  it('human mode shows only the ✗ + hint lines, never the raw JSON envelope', () => {
+    const savedTty = process.stdout.isTTY;
+    const savedAgent = process.env.SHUMI_AGENT;
+    process.stdout.isTTY = true;
+    delete process.env.SHUMI_AGENT;
+    try {
+      const err = Object.assign(new Error('Bad'), {
+        status: 429,
+        body: { error: { code: 'RATE_LIMITED', message: 'Too many', details: { tier: 'free', used: 10, limit: 10 } } },
+      });
+      renderErr(err, {}); // human mode: no --json / --agent
+      const text = stderr.chunks.join('');
+      expect(text).not.toContain('"schemaVersion"');
+      expect(text).not.toContain('"code":"RATE_LIMITED"');
+      expect(text).toContain('✗ Too many');
+      expect(text).toContain('Free tier limit reached');
+    } finally {
+      process.stdout.isTTY = savedTty;
+      if (savedAgent === undefined) delete process.env.SHUMI_AGENT;
+      else process.env.SHUMI_AGENT = savedAgent;
+    }
+  });
 });
 
 describe('applyClientFilters', () => {
@@ -161,5 +184,28 @@ describe('hintForError', () => {
   it('never invents a pricing deep-link — only the verified home URL', () => {
     const h = hintForError(env('RATE_LIMITED', 'x', { tier: 'free', used: 3, limit: 3 }));
     expect(h).not.toMatch(/shumi\.ai\/(pricing|upgrade|checkout|plans?)/);
+  });
+
+  it('enriched drip wall renders a premium copy with reset time + server upgrade_url', () => {
+    const resetAt = new Date(Date.now() + 7 * 3600_000).toISOString();
+    const h = hintForError(env('RATE_LIMITED', 'quota', {
+      tier: 'free', used: 1, limit: 1,
+      quota: { used: 1, limit: 1, remaining: 0, wall: 'drip', period: 'day' },
+      reset_at: resetAt, upgrade_url: 'https://shumi.ai/pricing',
+    }));
+    expect(h).toContain("today's free query");
+    expect(h).toMatch(/unlocks in ~7h/);
+    expect(h).toContain('https://shumi.ai/pricing'); // deep-link is server-provided, not invented
+    expect(h).not.toContain('—'); // no em-dashes in published copy
+  });
+
+  it('enriched grant wall names the lifetime cap', () => {
+    const h = hintForError(env('RATE_LIMITED', 'quota', {
+      tier: 'free', used: 10, limit: 10,
+      quota: { used: 10, limit: 10, remaining: 0, wall: 'grant', period: 'lifetime' },
+      reset_at: new Date(Date.now() + 20 * 3600_000).toISOString(),
+      upgrade_url: 'https://shumi.ai/pricing',
+    }));
+    expect(h).toContain('all 10 free queries');
   });
 });

@@ -1,5 +1,6 @@
 import { apiGet } from '../lib/api-client.js';
 import { renderOk, renderErr, spinner } from '../lib/output.js';
+import { smartFormat } from '../lib/smartFormat.js';
 
 export function registerSignalQualityCommand(program) {
   program
@@ -16,7 +17,7 @@ export function registerSignalQualityCommand(program) {
           ...(opts.signalType && { signal_type: opts.signalType }),
         });
         sp.stop();
-        renderOk(env, opts, (d) => process.stdout.write(JSON.stringify(d, null, 2) + '\n'));
+        renderOk(env, opts, (d, chalk) => smartFormat(d, chalk, opts));
       } catch (err) { sp.stop(); renderErr(err, opts); }
     });
 }
