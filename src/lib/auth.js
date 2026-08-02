@@ -94,8 +94,12 @@ export async function login({ onUrl } = {}) {
       });
     });
 
-    // Timeout after 2 minutes. This must stay >= the browser page's own 25s
-    // watchdog so the browser can show its specific error first.
+    // Must stay >= the browser page's own 25s watchdog so the browser shows its
+    // specific error first. 5 minutes rather than 2 because that error now asks
+    // for real work: find the ad blocker, disable it for the site, reload, then
+    // sign. At 2 minutes that recovery raced us, and losing meant signing in
+    // successfully to a port we had already stopped listening on. Holding a
+    // localhost socket open costs nothing.
     timeoutId = setTimeout(() => {
       if (!settled) {
         cleanup();
@@ -103,7 +107,7 @@ export async function login({ onUrl } = {}) {
         err.timedOut = true;
         reject(err);
       }
-    }, 120000);
+    }, 300000);
   });
 }
 
