@@ -51,9 +51,14 @@ export function registerAuthCommands(program) {
           } catch { /* ignore */ }
           spinner.fail('Authentication timed out.');
           console.log('');
-          console.log("Sign-in happens in the browser tab. If it didn't complete, common causes are:");
-          console.log(`  ${chalk.dim('•')} a privacy/ad blocker or VPN blocking app.dynamic.xyz`);
-          console.log(`  ${chalk.dim('•')} the wallet connection wasn't finished`);
+          // The browser tab diagnoses the stall itself and names the cause on
+          // screen, so point there first. This list stays a guess for the case
+          // where the tab was closed before it could say anything.
+          console.log('Sign-in happens in the browser tab, and that tab shows what went wrong.');
+          console.log('If you closed it, the usual causes are:');
+          console.log(`  ${chalk.dim('•')} an ad blocker, privacy extension, or VPN blocking sign-in`);
+          console.log(`  ${chalk.dim('•')} a private or incognito window, which blocks the storage sign-in needs`);
+          console.log(`  ${chalk.dim('•')} the wallet connection was never finished`);
           console.log(`  ${chalk.dim('•')} the connected wallet doesn't hold SHUMI`);
           console.log('');
           console.log(`Re-run ${chalk.cyan('shumi login')} and connect the wallet that holds your SHUMI.`);
