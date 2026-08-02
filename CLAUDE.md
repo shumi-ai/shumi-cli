@@ -20,8 +20,20 @@ To cut a release:
 #    and push the tag:
 git commit -am "chore(release): shumi-cli 0.4.3"
 git tag v0.4.3
-git push --follow-tags
+git push origin main
+git push origin v0.4.3          # push the tag explicitly, see below
 ```
+
+**Push the tag by name, not with `--follow-tags`.** `--follow-tags` carries only
+*annotated* tags, and `git tag v0.4.3` creates a lightweight one, so the commit
+goes up, the tag silently stays local, and nothing publishes. Git reports success
+either way. Verify before you walk away:
+
+```bash
+git ls-remote --tags origin | grep v0.4.3   # no output = nothing will publish
+```
+
+This bit 0.7.4, which was released following these steps as written.
 
 Pushing a `v*.*.*` tag triggers `.github/workflows/publish.yml`, which:
 1. installs deps with yarn, runs the test suite,
@@ -38,4 +50,6 @@ Notes:
 - Do **not** add or restore an `NPM_TOKEN` — OIDC replaces it. The old token was
   revoked.
 - `npm version patch|minor|major` also works to do the bump+commit+tag in one
-  step; just ensure the tag is pushed (`git push --follow-tags`).
+  step, and it annotates the tag, so `git push --follow-tags` does carry it.
+  That is the one path where `--follow-tags` is safe. Confirm with
+  `git ls-remote --tags origin` regardless.
