@@ -139,16 +139,29 @@ Errors always emit a stable JSON envelope on **stderr**, so `stdout | jq` never 
 }
 ```
 
+`AUTH_EXPIRED` (exit `2`) is distinct from `AUTH_REQUIRED` — the session aged out rather than never existing, and its `details.expiresAt` says when. `UPGRADE_REQUIRED` (exit `1`) means the server refused this client version.
+
 Success envelopes carry `schemaVersion`, `data`, and `meta`. Bump `schemaVersion` on a breaking shape change — pinned clients can detect.
 
 ## Authentication
 
 ```bash
 shumi login           # browser-based wallet auth (Dynamic.xyz)
+shumi login --paste   # finish a sign-in whose browser callback failed
 shumi keys create     # issue an API key for headless / CI / agent use
 ```
 
 Set `SHUMI_TOKEN=shumi_sk_...` in environments without a browser. Credentials are stored at `~/.shumi/config.json` (`0600`). Tokens expire and `shumi doctor` will tell you when.
+
+If the browser shows a connection error *after* you signed — the CLI stopped listening before the callback arrived — the token was still issued. Copy that page's URL and run `shumi login --paste`; it is read from a hidden prompt (never a flag, so it stays out of shell history) and verified against the sign-in you started before anything is saved.
+
+### Staying current
+
+Machine consumers can't see the update banner, so a newer version is reported in the JSON envelope itself under `meta.updateAvailable` (on both success and error), and by `shumi doctor`'s `version` check. `SHUMI_NO_UPDATE_NOTIFIER=1` disables the whole thing.
+
+```json
+{ "schemaVersion": 1, "data": {}, "meta": { "updateAvailable": { "current": "0.6.2", "latest": "0.7.4", "action": "npm i -g shumi@latest" } } }
+```
 
 ## Requirements
 

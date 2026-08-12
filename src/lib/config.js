@@ -74,6 +74,21 @@ export function getToken() {
   return config.token;
 }
 
+/**
+ * The stored credential WITHOUT the expiry filter above.
+ *
+ * `getToken()` returns null for an expired token, which makes "expired" and
+ * "never logged in" indistinguishable downstream — the user gets a generic
+ * "Authentication required" and no hint that a re-login is all that is needed.
+ * Callers that want to *report* on the credential use this and inspect it.
+ * Callers that want to *send* it must keep using getToken().
+ */
+export function getRawToken() {
+  if (process.env.SHUMI_TOKEN) return process.env.SHUMI_TOKEN;
+  if (process.env.SHUMI_NO_CONFIG === '1') return null;
+  return readConfig().token || null;
+}
+
 export function getWalletAddress() {
   return process.env.SHUMI_WALLET || readConfig().walletAddress || null;
 }
@@ -94,6 +109,32 @@ export function isTelemetryOptedOut() {
 export function saveCredentials({ token, walletAddress, expiresAt }) {
   const config = readConfig();
   writeConfig({ ...config, token, walletAddress, expiresAt });
+}
+
+// A pending sign-in's CSRF state, persisted so it outlives the process that
+// started it. Without this, a callback that arrives after the login command
+// died (closed laptop, browser took too long) can only be recovered by
+// skipping the state check entirely — i.e. accepting a login-CSRF hole. One
+// hour is far longer than any real sign-in and short enough that a stale entry
+// can't be replayed days later.
+const LOGIN_STATE_TTL_MS = 60 * 60 * 1000;
+
+export function savePendingLoginState(state) {
+  const config = readConfig();
+  writeConfig({ ...config, pendingLogin: { state, createdAt: Date.now() } });
+}
+
+/** The pending state string, or null if absent or older than the TTL. */
+export function getPendingLoginState() {
+  const pending = readConfig().pendingLogin;
+  if (!pending?.state || typeof pending.createdAt !== 'number') return null;
+  if (Date.now() - pending.createdAt > LOGIN_STATE_TTL_MS) return null;
+  return pending.state;
+}
+
+export function clearPendingLoginState() {
+  const { pendingLogin, ...rest } = readConfig();
+  writeConfig(rest);
 }
 
 export function clearCredentials() {

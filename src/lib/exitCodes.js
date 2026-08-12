@@ -42,7 +42,11 @@ export function exitCodeForErrCode(code) {
   switch (code) {
     case 'AUTH_REQUIRED':
     case 'AUTH_INVALID':
+    case 'AUTH_EXPIRED':
       return Exit.AUTH_REQUIRED;
+    // A too-old client is a user-fixable problem (upgrade), not a server fault.
+    case 'UPGRADE_REQUIRED':
+      return Exit.USER_ERROR;
     case 'RATE_LIMITED':
       return Exit.RATE_LIMITED;
     case 'BAD_REQUEST':
