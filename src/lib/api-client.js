@@ -1,6 +1,70 @@
-import { API_URL, KEYS_URL, getDeviceId, getToken, getWalletAddress } from './config.js';
+import { createRequire } from 'module';
+import { API_URL, KEYS_URL, getDeviceId, getToken, getRawToken, getWalletAddress } from './config.js';
 import { fetchWithX402, consumeLastPaymentMeta } from './x402-client.js';
 import { capture } from './telemetry.js';
+import { inspectToken } from './token.js';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../../package.json');
+
+// Identify the client on every request. The server cannot otherwise tell which
+// version a caller is on — which is how a fleet of clients stayed six weeks
+// behind a shipped auth fix with nobody able to see it. Also the prerequisite
+// for ever refusing a version floor (426) rather than failing cryptically.
+const USER_AGENT = `${pkg.name}/${pkg.version} (node ${process.version}; ${process.platform})`;
+
+/**
+ * Headers for an authenticated call. Single place so the UA can never be
+ * added to some routes and forgotten on others.
+ */
+function authHeaders(token, extra = {}) {
+  return { 'Authorization': `Bearer ${token}`, 'User-Agent': USER_AGENT, ...extra };
+}
+
+/**
+ * Resolve the credential, distinguishing "expired" from "absent".
+ *
+ * getToken() collapses the two (it returns null once past expiry), which left
+ * a user staring at "Authentication required" with no idea their session had
+ * simply aged out. Checking the JWT's own `exp` also catches an expired
+ * SHUMI_TOKEN from the environment, which the config-file expiry never saw.
+ * Throws ApiError(401) with a distinct code; returns the token otherwise.
+ */
+function requireToken() {
+  const raw = getRawToken();
+  if (!raw) {
+    throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
+  }
+  const info = inspectToken(raw);
+  if (info.expired) {
+    const days = Math.max(0, Math.floor((Date.now() - Date.parse(info.expiresAt)) / 86_400_000));
+    const ago = days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`;
+    throw new ApiError(401, {
+      error: {
+        code: 'AUTH_EXPIRED',
+        message: `Session expired ${ago}. Run: shumi login`,
+        details: { expiresAt: info.expiresAt },
+      },
+    });
+  }
+  return raw;
+}
+
+/**
+ * A server enforcing a minimum client version answers 426. Say what to do
+ * instead of surfacing a bare status the user cannot act on.
+ */
+function upgradeRequiredError(body) {
+  const min = body?.error?.details?.minVersion || body?.minVersion;
+  const floor = min ? ` This server requires ${pkg.name} >= ${min}.` : '';
+  return new ApiError(426, {
+    error: {
+      code: 'UPGRADE_REQUIRED',
+      message: `Your ${pkg.name} ${pkg.version} is too old for this server.${floor} Run: npm i -g ${pkg.name}@latest`,
+      details: { current: pkg.version, minVersion: min || null },
+    },
+  });
+}
 
 /**
  * Emit an api_request_completed event. Route is the path segment only (never
@@ -49,10 +113,12 @@ export class ApiError extends Error {
 export async function apiGet(path, query = {}) {
   const route = String(path).replace(/^\//, ''); // path only — never the full URL
   const startedAt = Date.now();
-  const token = getToken();
-  if (!token) {
+  let token;
+  try {
+    token = requireToken();
+  } catch (err) {
     captureApiRequest(route, 401, Date.now() - startedAt);
-    throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
+    throw err;
   }
 
   const url = new URL(`${TYPED_BASE}/${route}`);
@@ -67,7 +133,7 @@ export async function apiGet(path, query = {}) {
     // returns the original response untouched, so this is a one-line swap.
     response = await fetchWithX402(url, {
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: authHeaders(token),
       signal: AbortSignal.timeout(TYPED_TIMEOUT_MS),
     });
   } catch (err) {
@@ -88,6 +154,7 @@ export async function apiGet(path, query = {}) {
   let body;
   try { body = text ? JSON.parse(text) : null; } catch { body = { error: { code: 'INTERNAL', message: text || 'invalid response' } }; }
 
+  if (response.status === 426) throw upgradeRequiredError(body);
   if (!response.ok) throw new ApiError(response.status, body);
   return attachPaymentMeta(body);
 }
@@ -99,7 +166,13 @@ export async function query({ messages, raw = false, archetype = 'base', command
   const deviceId = getDeviceId();
   const walletAddress = getWalletAddress();
 
-  const headers = { 'Content-Type': 'application/json' };
+  // The NLP route serves anonymous callers too, so a missing token is fine
+  // here — but an EXPIRED one is not. Silently downgrading to anon is how a
+  // paying user ends up hitting the free-tier wall with no explanation.
+  const stored = getRawToken();
+  if (stored && inspectToken(stored).expired) requireToken();
+
+  const headers = { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -143,6 +216,9 @@ export async function query({ messages, raw = false, archetype = 'base', command
       errorBody = { error: text || `Request failed: ${response.status}` };
     }
 
+    if (response.status === 426) {
+      throw upgradeRequiredError(errorBody);
+    }
     if (response.status === 401) {
       throw new ApiError(401, { error: 'Authentication required. Run: shumi login' });
     }
@@ -166,15 +242,11 @@ export async function query({ messages, raw = false, archetype = 'base', command
 }
 
 export async function createKey(name) {
-  const token = getToken();
-  if (!token) throw new ApiError(401, { error: 'Authentication required. Run: shumi login' });
+  const token = requireToken();
 
   const response = await fetch(KEYS_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
+    headers: authHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name: name || 'Default' }),
     signal: AbortSignal.timeout(15000),
   });
@@ -188,12 +260,11 @@ export async function createKey(name) {
 }
 
 export async function listKeys() {
-  const token = getToken();
-  if (!token) throw new ApiError(401, { error: 'Authentication required. Run: shumi login' });
+  const token = requireToken();
 
   const response = await fetch(KEYS_URL, {
     method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}` },
+    headers: authHeaders(token),
     signal: AbortSignal.timeout(15000),
   });
 
@@ -206,12 +277,11 @@ export async function listKeys() {
 }
 
 export async function revokeKey(prefix) {
-  const token = getToken();
-  if (!token) throw new ApiError(401, { error: 'Authentication required. Run: shumi login' });
+  const token = requireToken();
 
   const response = await fetch(`${KEYS_URL}?prefix=${encodeURIComponent(prefix)}`, {
     method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${token}` },
+    headers: authHeaders(token),
     signal: AbortSignal.timeout(15000),
   });
 
@@ -229,7 +299,7 @@ export async function healthCheck() {
     // A 400 (bad request) still means the server is up
     const response = await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
       body: JSON.stringify({}),
       signal: AbortSignal.timeout(10000),
     });

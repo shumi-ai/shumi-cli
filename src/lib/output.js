@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
 import { captureError } from './telemetry.js';
+import { getUpdateInfo } from './updateCheck.js';
 
 /**
  * Decide whether an error is a real fault worth capturing (5xx, network,
@@ -58,11 +59,25 @@ export function spinner(text, opts = {}) {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    process.stdout.write(JSON.stringify(envelope) + '\n');
+    process.stdout.write(JSON.stringify(withUpdateNotice(envelope)) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);
   else process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
+}
+
+/**
+ * Attach `meta.updateAvailable` when a newer version is known.
+ *
+ * This is the only channel that reaches a machine consumer: `notify()` prints
+ * nothing when stdout is piped, and `resolveMode()` forces JSON for exactly
+ * those runs. Nested under `meta` so it can never collide with a command's
+ * `data` payload. No-op when up to date.
+ */
+function withUpdateNotice(env) {
+  const update = getUpdateInfo();
+  if (!update || !env || typeof env !== 'object') return env;
+  return { ...env, meta: { ...(env.meta || {}), updateAvailable: update } };
 }
 
 /**
@@ -77,7 +92,10 @@ export function renderErr(err, opts = {}) {
       captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
     } catch { /* telemetry must never affect error rendering */ }
   }
-  process.stderr.write(JSON.stringify(envelope) + '\n');
+  // The error path matters more than the success path here: a client stuck on
+  // a version whose bug makes every command fail would otherwise never see the
+  // notice, because renderOk never runs for it.
+  process.stderr.write(JSON.stringify(withUpdateNotice(envelope)) + '\n');
   if (!mode.json && !mode.agent) {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
   }

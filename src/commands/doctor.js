@@ -1,7 +1,9 @@
 import chalk from 'chalk';
 import { createRequire } from 'module';
-import { API_URL, getToken, getDeviceId, CONFIG_FILE } from '../lib/config.js';
+import { API_URL, getToken, getRawToken, getDeviceId, CONFIG_FILE } from '../lib/config.js';
+import { inspectToken } from '../lib/token.js';
 import { resolveMode } from '../lib/output.js';
+import { isNewer } from '../lib/updateCheck.js';
 import { Exit } from '../lib/exitCodes.js';
 import { existsSync, statSync } from 'fs';
 
@@ -25,7 +27,7 @@ export function registerDoctorCommand(program) {
       checks.push(checkToken());
       checks.push(await checkNetwork());
       checks.push(await checkAuthEndpoint());
-      checks.push(checkVersion());
+      checks.push(await checkVersion());
 
       const failed = checks.some((c) => c.status === 'fail');
 
@@ -54,10 +56,18 @@ function checkConfigFile() {
 }
 
 function checkToken() {
-  const token = getToken();
+  // getRawToken, not getToken: the latter returns null once expired, which
+  // would report an aged-out session as "never logged in" — the exact
+  // confusion this command exists to clear up. README promises doctor tells
+  // you when a token expires, so actually say it.
+  const token = getRawToken();
   if (!token) return { name: 'auth token', status: 'warn', detail: 'no token (run: shumi login or set SHUMI_TOKEN)' };
-  const kind = token.startsWith('shumi_sk_') ? 'API key' : 'JWT';
-  return { name: 'auth token', status: 'pass', detail: `${kind} present` };
+  const info = inspectToken(token);
+  if (info.expired) {
+    return { name: 'auth token', status: 'fail', detail: `JWT expired ${info.expiresAt} — run: shumi login` };
+  }
+  const expiry = info.expiresAt ? `, expires ${info.expiresAt.slice(0, 10)}` : '';
+  return { name: 'auth token', status: 'pass', detail: `${info.kind} present${expiry}` };
 }
 
 async function checkNetwork() {
@@ -86,6 +96,37 @@ async function checkAuthEndpoint() {
   }
 }
 
-function checkVersion() {
-  return { name: 'version', status: 'pass', detail: `${pkg.name}@${pkg.version} on node ${process.version} (deviceId ${getDeviceId().slice(0, 8)}…)` };
+/**
+ * Version freshness. Asks the npm registry directly rather than trusting the
+ * update-notifier cache: that cache is empty on a first run and disabled
+ * outright in CI, and "am I on a version with known-fixed bugs" is the single
+ * question this command exists to answer honestly.
+ *
+ * registry.npmjs.org is not the Shumi API, so this spends no query quota.
+ */
+async function checkVersion() {
+  const local = `${pkg.name}@${pkg.version} on node ${process.version} (deviceId ${getDeviceId().slice(0, 8)}…)`;
+  // No `accept: …install-v1+json` here: that abbreviated-metadata type applies
+  // to the packument root, and on /latest the registry answers 200 with an
+  // empty body — which parsed as "no latest known" and reported healthy. A
+  // freshness check that silently degrades to a pass is worse than none.
+  let latest = null;
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) latest = (await res.json())?.version || null;
+  } catch { /* offline — reported below as unknown, not as up to date */ }
+
+  if (!latest) {
+    return { name: 'version', status: 'warn', detail: `${local}; could not reach the npm registry to check for updates` };
+  }
+  if (isNewer(latest, pkg.version)) {
+    return {
+      name: 'version',
+      status: 'warn',
+      detail: `${pkg.version} is behind ${latest} — run: npm i -g ${pkg.name}@latest`,
+    };
+  }
+  return { name: 'version', status: 'pass', detail: `${local}, latest` };
 }

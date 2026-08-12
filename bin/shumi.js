@@ -2,21 +2,22 @@
 
 import { createRequire } from 'module';
 import { program } from 'commander';
-import updateNotifier from 'update-notifier';
+import { initUpdateCheck } from '../src/lib/updateCheck.js';
 import { registerCommands } from '../src/index.js';
 import { initTelemetry, captureError, flush, shutdown } from '../src/lib/telemetry.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-// Update notifier — stderr only, suppressed in non-TTY / agent mode / env opt-out
-// so it never corrupts piped JSON output.
-const isTty = Boolean(process.stdout.isTTY);
+// Update check. Run it for EVERYONE (env opt-out aside), not just on a TTY.
+// The old `isTty &&` guard here meant agent-driven users never even performed
+// the background check, so they sat on a known-broken version indefinitely —
+// see src/lib/updateCheck.js. The result now reaches machines through the JSON
+// envelope and `shumi doctor`; notify() below is only the human surface, and
+// the library self-gates it on stdout.isTTY, so piped output stays clean.
 const isAgent = process.argv.includes('--agent') || process.env.SHUMI_AGENT === '1';
-const optOut = process.env.SHUMI_NO_UPDATE_NOTIFIER === '1';
-if (isTty && !isAgent && !optOut) {
-  updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({ defer: true });
-}
+const notifier = initUpdateCheck(pkg);
+if (notifier && !isAgent) notifier.notify({ defer: true });
 
 // Telemetry (PostHog) — safe no-op if disabled / no key. Must be initialized
 // before any command runs so capture() at the chokepoints has a live client.
