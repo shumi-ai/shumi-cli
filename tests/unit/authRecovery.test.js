@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { existsSync, rmSync, mkdtempSync } from 'fs';
@@ -13,7 +13,8 @@ process.env.USERPROFILE = tmpHome;
 const { parseCallbackUrl, acceptCallbackCredential } = await import('../../src/lib/auth.js');
 const { savePendingLoginState, clearPendingLoginState, getToken, clearCredentials } =
   await import('../../src/lib/config.js');
-const { isNewer } = await import('../../src/lib/updateCheck.js');
+const { isNewer, __setUpdateInfo } = await import('../../src/lib/updateCheck.js');
+const { renderOk } = await import('../../src/lib/output.js');
 
 /** Minimal unsigned JWT — inspectToken only decodes the payload. */
 function jwt(payload) {
@@ -93,6 +94,43 @@ describe('isNewer', () => {
   // noise on a maintainer's machine.
   it('does not nag a local prerelease that is ahead of the registry', () => {
     expect(isNewer('0.7.4', '0.8.0-dev')).toBe(false);
+  });
+});
+
+// The whole point of the update work: this envelope field is the ONLY channel
+// that reaches a caller whose stdout is piped, which is every AI-agent user.
+describe('meta.updateAvailable in the JSON envelope', () => {
+  const update = { current: '0.6.2', latest: '0.7.4', action: 'npm i -g shumi@latest' };
+  let written;
+
+  beforeEach(() => {
+    written = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => { written.push(s); return true; });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __setUpdateInfo(null);
+  });
+
+  it('attaches the notice without disturbing data', () => {
+    __setUpdateInfo(update);
+    renderOk({ schemaVersion: 1, data: { ok: true } }, { json: true });
+    const env = JSON.parse(written.join(''));
+    expect(env.data).toEqual({ ok: true });
+    expect(env.meta.updateAvailable).toEqual(update);
+  });
+
+  it('preserves any meta the command already set', () => {
+    __setUpdateInfo(update);
+    renderOk({ schemaVersion: 1, data: {}, meta: { route: 'coin/risk' } }, { json: true });
+    const env = JSON.parse(written.join(''));
+    expect(env.meta).toEqual({ route: 'coin/risk', updateAvailable: update });
+  });
+
+  it('adds nothing when up to date', () => {
+    __setUpdateInfo(null);
+    renderOk({ schemaVersion: 1, data: { ok: true } }, { json: true });
+    expect(JSON.parse(written.join(''))).toEqual({ schemaVersion: 1, data: { ok: true } });
   });
 });
 
