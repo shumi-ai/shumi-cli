@@ -3,6 +3,7 @@ import ora from 'ora';
 import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
 import { captureError } from './telemetry.js';
 import { getUpdateInfo } from './updateCheck.js';
+import { authExpiryNotice } from './authNotice.js';
 
 /**
  * Decide whether an error is a real fault worth capturing (5xx, network,
@@ -59,7 +60,7 @@ export function spinner(text, opts = {}) {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    process.stdout.write(JSON.stringify(withUpdateNotice(envelope)) + '\n');
+    process.stdout.write(JSON.stringify(withNotices(envelope)) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);
@@ -67,17 +68,27 @@ export function renderOk(envelope, opts = {}, human) {
 }
 
 /**
- * Attach `meta.updateAvailable` when a newer version is known.
+ * Attach out-of-band notices to a JSON envelope: a newer version is available,
+ * or the session is about to expire.
  *
  * This is the only channel that reaches a machine consumer: `notify()` prints
  * nothing when stdout is piped, and `resolveMode()` forces JSON for exactly
- * those runs. Nested under `meta` so it can never collide with a command's
- * `data` payload. No-op when up to date.
+ * those runs. Both are nested under `meta` so they can never collide with a
+ * command's `data` payload. No-op when there is nothing to say.
  */
-function withUpdateNotice(env) {
+function withNotices(env) {
+  if (!env || typeof env !== 'object') return env;
   const update = getUpdateInfo();
-  if (!update || !env || typeof env !== 'object') return env;
-  return { ...env, meta: { ...(env.meta || {}), updateAvailable: update } };
+  const expiring = authExpiryNotice();
+  if (!update && !expiring) return env;
+  return {
+    ...env,
+    meta: {
+      ...(env.meta || {}),
+      ...(update && { updateAvailable: update }),
+      ...(expiring && { authExpiring: expiring }),
+    },
+  };
 }
 
 /**
@@ -95,7 +106,7 @@ export function renderErr(err, opts = {}) {
   // The error path matters more than the success path here: a client stuck on
   // a version whose bug makes every command fail would otherwise never see the
   // notice, because renderOk never runs for it.
-  process.stderr.write(JSON.stringify(withUpdateNotice(envelope)) + '\n');
+  process.stderr.write(JSON.stringify(withNotices(envelope)) + '\n');
   if (!mode.json && !mode.agent) {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
   }

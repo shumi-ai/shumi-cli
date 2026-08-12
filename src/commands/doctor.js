@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { createRequire } from 'module';
 import { API_URL, getToken, getRawToken, getDeviceId, CONFIG_FILE } from '../lib/config.js';
 import { inspectToken } from '../lib/token.js';
+import { authExpiryNotice, describeExpiry } from '../lib/authNotice.js';
 import { resolveMode } from '../lib/output.js';
 import { isNewer } from '../lib/updateCheck.js';
 import { Exit } from '../lib/exitCodes.js';
@@ -67,6 +68,16 @@ function checkToken() {
     return { name: 'auth token', status: 'fail', detail: `JWT expired ${info.expiresAt} — run: shumi login` };
   }
   const expiry = info.expiresAt ? `, expires ${info.expiresAt.slice(0, 10)}` : '';
+  // Grade the remaining time, don't just print the date. These sessions have no
+  // refresh (exp === refreshExp), so the only warning a user ever gets is the
+  // one we choose to give — 'warn' keeps doctor's exit code at 0 while still
+  // showing yellow.
+  const soon = authExpiryNotice();
+  if (soon) {
+    // Both facts, once each: the countdown is a floor (2.9 days reads as 2),
+    // so the date is what makes it unambiguous.
+    return { name: 'auth token', status: 'warn', detail: `${info.kind} ${describeExpiry(soon)} (${soon.expiresAt.slice(0, 10)}) — run: shumi login` };
+  }
   return { name: 'auth token', status: 'pass', detail: `${info.kind} present${expiry}` };
 }
 

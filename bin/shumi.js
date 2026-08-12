@@ -3,6 +3,7 @@
 import { createRequire } from 'module';
 import { program } from 'commander';
 import { initUpdateCheck } from '../src/lib/updateCheck.js';
+import { authExpiryNotice, describeExpiry } from '../src/lib/authNotice.js';
 import { registerCommands } from '../src/index.js';
 import { initTelemetry, captureError, flush, shutdown } from '../src/lib/telemetry.js';
 
@@ -64,9 +65,29 @@ program
 
 registerCommands(program);
 
+/**
+ * Human-facing pre-expiry warning, printed once per invocation on stderr so it
+ * cannot corrupt piped stdout. Machines get the same fact as
+ * `meta.authExpiring` in the JSON envelope instead — this is only the TTY half.
+ *
+ * Placed here rather than in each command: one warning per process, on every
+ * command, is the whole point. A session that ends with no warning reads as an
+ * outage, not as "log in again".
+ */
+function warnIfSessionExpiring() {
+  try {
+    if (!process.stdout.isTTY || isAgent) return;
+    const notice = authExpiryNotice();
+    if (notice) {
+      process.stderr.write(`\nshumi: your session ${describeExpiry(notice)} (${notice.expiresAt.slice(0, 10)}). Run: ${notice.action}\n`);
+    }
+  } catch { /* a warning must never be able to fail a command */ }
+}
+
 program
   .parseAsync()
   .then(async () => {
+    warnIfSessionExpiring();
     // Normal completion: flush queued telemetry (bounded so it never hangs).
     await shutdown();
     // Force-exit: the PostHog client can leave a pending socket open that keeps

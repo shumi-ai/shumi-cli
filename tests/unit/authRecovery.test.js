@@ -105,11 +105,17 @@ describe('meta.updateAvailable in the JSON envelope', () => {
 
   beforeEach(() => {
     written = [];
+    // withNotices() also attaches meta.authExpiring, and an earlier describe in
+    // this file leaves a short-lived credential behind — which would make these
+    // assertions depend on test order. Hide the credential so each case asserts
+    // only the update notice it is actually about.
+    process.env.SHUMI_NO_CONFIG = '1';
     vi.spyOn(process.stdout, 'write').mockImplementation((s) => { written.push(s); return true; });
   });
   afterEach(() => {
     vi.restoreAllMocks();
     __setUpdateInfo(null);
+    delete process.env.SHUMI_NO_CONFIG;
   });
 
   it('attaches the notice without disturbing data', () => {
