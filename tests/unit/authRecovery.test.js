@@ -153,6 +153,29 @@ describe('expired vs missing credential', () => {
     });
   });
 
+  // Regression guard: reading the raw token must not start sending a
+  // credential that getToken()'s config-file expiry check used to block. A
+  // token with no `exp` claim has no other gate.
+  it('still refuses a token the config file marks expired, even with no JWT exp', async () => {
+    const { saveCredentials, clearCredentials: clear } = await import('../../src/lib/config.js');
+    delete process.env.SHUMI_TOKEN;
+    clear();
+    saveCredentials({
+      token: jwt({ sub: 'no-exp-claim' }),
+      walletAddress: '0xdeadbeef',
+      expiresAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    });
+    try {
+      const { apiGet } = await import('../../src/lib/api-client.js');
+      await expect(apiGet('coin/risk/BTC')).rejects.toMatchObject({
+        status: 401,
+        body: { error: { code: 'AUTH_EXPIRED' } },
+      });
+    } finally {
+      clear();
+    }
+  });
+
   it('still reports AUTH_REQUIRED when there is no credential at all', async () => {
     delete process.env.SHUMI_TOKEN;
     process.env.SHUMI_NO_CONFIG = '1';

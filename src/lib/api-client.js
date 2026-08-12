@@ -36,18 +36,32 @@ function requireToken() {
     throw new ApiError(401, { error: { code: 'AUTH_REQUIRED', message: 'Authentication required. Run: shumi login' } });
   }
   const info = inspectToken(raw);
-  if (info.expired) {
-    const days = Math.max(0, Math.floor((Date.now() - Date.parse(info.expiresAt)) / 86_400_000));
-    const ago = days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`;
+  // Two independent expiry sources, and both must still gate the send. The
+  // JWT's own `exp` is the one getToken() never saw (it catches an aged-out
+  // SHUMI_TOKEN too). The config file's `expiresAt` is the one getToken() DID
+  // enforce — reading raw here must not quietly start sending a credential the
+  // old code refused, so consult getToken() for that verdict rather than
+  // re-implementing it. A token with no `exp` claim relies entirely on it.
+  const configExpired = getToken() === null;
+  if (info.expired || configExpired) {
     throw new ApiError(401, {
       error: {
         code: 'AUTH_EXPIRED',
-        message: `Session expired ${ago}. Run: shumi login`,
+        message: `Session expired${expiredAgo(info.expiresAt)}. Run: shumi login`,
         details: { expiresAt: info.expiresAt },
       },
     });
   }
   return raw;
+}
+
+/** " 13 days ago" — empty when the expiry date isn't knowable client-side. */
+function expiredAgo(expiresAt) {
+  const at = expiresAt ? Date.parse(expiresAt) : NaN;
+  if (Number.isNaN(at)) return '';
+  const days = Math.max(0, Math.floor((Date.now() - at) / 86_400_000));
+  if (days === 0) return ' today';
+  return days === 1 ? ' 1 day ago' : ` ${days} days ago`;
 }
 
 /**
