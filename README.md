@@ -34,7 +34,7 @@ $ shumi doctor --json | jq '.data.ok'
 
 **Claude Code, Cursor, Codex CLI, opencode** — they shell out to anything on `$PATH`. After `npm i -g shumi && shumi login`, prompt your agent: *"Use the `shumi` CLI to fetch the active regime and BTC risk, then summarize."* The agent reads `shumi --help` and `shumi commands --json` to discover the surface; no per-tool wiring required.
 
-**MCP** — a thin MCP wrapper (`@shumi-ai/mcp`) is on the roadmap. Until then, the CLI's typed surface is the canonical machine-readable interface.
+**MCP** — `@shumi-ai/mcp` ships the same surface as an MCP server: 31 tools covering prices, trends, funding, sentiment, narratives, regime, signals, pair and delta-neutral ideas, real-world assets, and holder/wallet tracking. Setup is in the [MCP docs](https://docs.shumi.ai/agents/mcp). Reach for it when your client speaks MCP natively; the CLI stays the better fit for anything that shells out.
 
 ## Quick start
 
