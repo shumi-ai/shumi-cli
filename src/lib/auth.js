@@ -109,11 +109,23 @@ export async function login({ onUrl } = {}) {
     });
 
     // Must stay >= the browser page's own 25s watchdog so the browser shows its
-    // specific error first. 5 minutes rather than 2 because that error now asks
-    // for real work: find the ad blocker, disable it for the site, reload, then
-    // sign. At 2 minutes that recovery raced us, and losing meant signing in
-    // successfully to a port we had already stopped listening on. Holding a
-    // localhost socket open costs nothing.
+    // specific error first. Beyond that the budget is set by how long a HUMAN
+    // takes, which we finally measured instead of guessing: a healthy sign-in
+    // on 0.7.5 — no ad blocker, no stall, no reload — took 260s end to end
+    // (2026-08-12, real wallet, prod). That is 87% of the previous 300s cap.
+    //
+    // Which means the old number was incoherent: it was chosen to accommodate
+    // the DEGRADED path (find the ad blocker, disable it for the site, reload,
+    // then sign) while the healthy path alone nearly exhausted it. The
+    // recovery it was sized for could not have fitted.
+    //
+    // 15 minutes. Not a guess at the degraded path's length — just enough room
+    // that a human is never racing us, which is the only thing this timeout
+    // should be measuring. Holding a localhost socket open costs nothing, and
+    // Ctrl-C cancels. It stays bounded rather than infinite so an abandoned
+    // login cannot leave a listener and a node process behind forever, and it
+    // stays inside the one-hour TTL on the pending-login state so `shumi login
+    // --paste` is always still valid when this fires.
     timeoutId = setTimeout(() => {
       if (!settled) {
         cleanup();
@@ -121,7 +133,7 @@ export async function login({ onUrl } = {}) {
         err.timedOut = true;
         reject(err);
       }
-    }, 300000);
+    }, 900000);
   });
 }
 
