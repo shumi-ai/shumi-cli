@@ -71,3 +71,14 @@ describe('describeExpiry', () => {
     expect(describeExpiry({ daysRemaining: 4 })).toBe('expires in 4 days');
   });
 });
+
+// The suite pins NOW and passes it in, so it reads as deterministic — and was not.
+// inspectToken computed `expired` from Date.now(), so authExpiryNotice compared a
+// fixture against two different clocks and started failing on 2026-08-16 with no
+// code change. This pins the injection rather than the symptom.
+it('honours the injected clock even long after the fixture would have expired', () => {
+  process.env.SHUMI_TOKEN = tokenExpiringIn(4);
+  const decadeLater = NOW + 3650 * DAY;
+  expect(authExpiryNotice(NOW)).toMatchObject({ daysRemaining: 4 });
+  expect(authExpiryNotice(decadeLater)).toBeNull();  // genuinely expired, by the injected clock
+});
