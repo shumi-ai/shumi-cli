@@ -103,21 +103,39 @@ describe('flag resolution: agent mode, auto-pay, max price', () => {
 });
 
 describe('formatChallengePrompt — anti-phishing prompt shape', () => {
-  it('shows price, network, from-address, to-address, and balance', () => {
+  it('shows price, token, chain, from-address, to-address, and balance', () => {
     const prompt = formatChallengePrompt({
-      priceUsdcStr: '0.005',
+      priceStr: '0.005',
+      symbol: 'USDC',
       route: 'coin/risk/BTC',
-      network: 'base',
+      chainLabel: 'Base',
       balanceFormatted: '4.83',
       walletAddress: '0xc624d24d17CF22ece0487101eD58B1d4742bb394',
       payToAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
     });
-    expect(prompt).toContain('$0.005 USDC on base');
+    expect(prompt).toContain('0.005 USDC on Base');
     expect(prompt).toContain('coin/risk/BTC');
     expect(prompt).toContain('0xc624…b394'); // truncated from-address
     expect(prompt).toContain('0xabcd…ef12'); // truncated to-address
-    expect(prompt).toContain('$4.83');
+    expect(prompt).toContain('4.83 USDC');
     expect(prompt).toContain('Pay? [Y/n]');
+  });
+
+  it('names the actual token and chain, not a hard-coded USDC-on-Base', () => {
+    // The whole point of the multi-chain work: a payer on Robinhood Chain is
+    // paying USDG, and a prompt that says "USDC on base" is simply lying to
+    // them at the moment they authorise a transfer.
+    const prompt = formatChallengePrompt({
+      priceStr: '0.05',
+      symbol: 'USDG',
+      route: 'ask',
+      chainLabel: 'Robinhood Chain',
+      balanceFormatted: '12.00',
+      walletAddress: '0xc624d24d17CF22ece0487101eD58B1d4742bb394',
+      payToAddress: '0xabcdef1234567890abcdef1234567890abcdef12',
+    });
+    expect(prompt).toContain('0.05 USDG on Robinhood Chain');
+    expect(prompt).not.toContain('USDC');
   });
 
   it('truncAddress shows first 6 + last 4 chars', () => {
@@ -146,5 +164,70 @@ describe('commandLabelFor — what the payment prompt shows', () => {
 
   it('falls back to the raw value rather than throwing inside a payment prompt', () => {
     expect(commandLabelFor('coin/risk/BTC')).toBe('coin/risk/BTC');
+  });
+});
+
+describe('usableRequirements — tolerant parsing across protocol versions', () => {
+  const { usableRequirements, selectRequirement, amountOf } = __testing;
+  const v1Base = {
+    scheme: 'exact', network: 'base', maxAmountRequired: '50000',
+    resource: 'https://api.shumi.ai/api/cli',
+    payTo: '0xc624d24d17CF22ece0487101eD58B1d4742bb394',
+    asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  };
+  const v2Rh = {
+    scheme: 'exact', network: 'eip155:4663', amount: '50000',
+    payTo: '0x1111111111111111111111111111111111111111',
+    asset: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+  };
+
+  it('reads the amount from either version field', () => {
+    expect(amountOf(v1Base)).toBe('50000');
+    expect(amountOf(v2Rh)).toBe('50000');
+    expect(amountOf({})).toBe(null);
+  });
+
+  it('accepts v2 rows, which use `amount` rather than `maxAmountRequired`', () => {
+    // Checking only the v1 field rejected every v2 row as "incomplete", which
+    // surfaced to the user as "no payment option this client can use" — a
+    // client bug wearing a server bug's clothes.
+    const { usable, skipped } = usableRequirements([v2Rh]);
+    expect(usable).toHaveLength(1);
+    expect(skipped).toHaveLength(0);
+  });
+
+  it('skips rows it cannot service instead of rejecting the whole challenge', () => {
+    // The regression this whole change exists to prevent: under x402@1.2.0 an
+    // unknown network threw, so ONE unpayable row cost the client every payable
+    // one alongside it.
+    const { usable, skipped } = usableRequirements([
+      v1Base,
+      { scheme: 'exact', network: 'eip155:999999', amount: '1', payTo: '0xa', asset: '0xb' },
+      { scheme: 'upto', network: 'base', amount: '1', payTo: '0xa', asset: '0xb' },
+      null,
+    ]);
+    expect(usable.map((r) => r.network)).toEqual(['base']);
+    expect(skipped).toHaveLength(3);
+  });
+
+  it('returns nothing usable rather than throwing when no row is payable', () => {
+    const { usable } = usableRequirements([{ scheme: 'exact', network: 'eip155:999999', amount: '1', payTo: '0xa', asset: '0xb' }]);
+    expect(usable).toHaveLength(0);
+  });
+
+  it('honours SHUMI_X402_NETWORK, and falls back to the server ordering', () => {
+    const usable = [v1Base, v2Rh];
+    delete process.env.SHUMI_X402_NETWORK;
+    expect(selectRequirement(usable).network).toBe('base');
+
+    process.env.SHUMI_X402_NETWORK = 'robinhood';
+    expect(selectRequirement(usable).network).toBe('eip155:4663');
+
+    // Pinning a chain the server did not offer must not silently pay elsewhere
+    // — it falls back to the server's first choice, which the user still sees
+    // named in the prompt before approving.
+    process.env.SHUMI_X402_NETWORK = 'polygon';
+    expect(selectRequirement(usable).network).toBe('base');
+    delete process.env.SHUMI_X402_NETWORK;
   });
 });
