@@ -128,3 +128,35 @@ describe('pauseActiveSpinner', () => {
     }
   });
 });
+
+describe('renderErr emits one rendering, not two', () => {
+  // An interactive user read the same failure twice — the raw JSON envelope and
+  // then the prose line. The envelope is a machine contract (stdout | jq must
+  // never break), so it stays for --json/--agent/non-TTY; a human gets prose.
+  const realTTY = process.stdout.isTTY;
+  afterEach(() => { process.stdout.isTTY = realTTY; });
+
+  it('gives a human the prose only', () => {
+    process.stdout.isTTY = true;
+    const err = { code: 'PAYMENT_REQUIRED', message: 'Payment declined — nothing was charged.' };
+    const cap = captureStream('stderr');
+    try { renderErr(err, {}); } finally { cap.restore(); }
+
+    const out = cap.chunks.join('');
+    expect(out).toContain('Payment declined');
+    expect(out).not.toContain('schemaVersion');
+    expect(out).not.toContain('"code"');
+  });
+
+  it('still gives a machine the envelope, and only the envelope', () => {
+    process.stdout.isTTY = true;   // agent mode must win over TTY detection
+    const err = { code: 'PAYMENT_REQUIRED', message: 'Payment declined — nothing was charged.' };
+    const cap = captureStream('stderr');
+    try { renderErr(err, { agent: true }); } finally { cap.restore(); }
+
+    const out = cap.chunks.join('');
+    const lines = out.trim().split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({ error: { code: 'PAYMENT_REQUIRED' } });
+  });
+});
