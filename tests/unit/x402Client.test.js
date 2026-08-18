@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { __testing } from '../../src/lib/x402-client.js';
+import { __testing, commandLabelFor } from '../../src/lib/x402-client.js';
 
 const {
   usdcStringToBaseUnits, baseUnitsToUsdcString,
@@ -124,5 +124,27 @@ describe('formatChallengePrompt — anti-phishing prompt shape', () => {
     expect(truncAddress('0xc624d24d17CF22ece0487101eD58B1d4742bb394')).toBe('0xc624…b394');
     expect(truncAddress(null)).toBe('?');
     expect(truncAddress(undefined)).toBe('?');
+  });
+});
+
+describe('commandLabelFor — what the payment prompt shows', () => {
+  // `resource` became an absolute URL because the x402 v2 spec requires one and the CDP
+  // facilitator rejects a bare path. Printed raw, the prompt read
+  // "…to run `https://coinrotator-ai.onrender.com/api/cli/coin/risk/DOGE`" — an internal
+  // hostname, in the one message where the user is deciding whether to spend money.
+  it('renders the command the user typed, not the internal URL', () => {
+    expect(commandLabelFor('https://api.shumi.ai/api/cli/coin/risk/DOGE')).toBe('shumi coin risk DOGE');
+  });
+
+  it('names the NLP route, which lives at /api/cli itself', () => {
+    expect(commandLabelFor('https://api.shumi.ai/api/cli')).toBe('shumi ask');
+  });
+
+  it('is unaffected by which host served the challenge', () => {
+    expect(commandLabelFor('https://coinrotator-ai.onrender.com/api/cli/pairs')).toBe('shumi pairs');
+  });
+
+  it('falls back to the raw value rather than throwing inside a payment prompt', () => {
+    expect(commandLabelFor('coin/risk/BTC')).toBe('coin/risk/BTC');
   });
 });

@@ -45,12 +45,43 @@ export function resolveMode(opts = {}) {
   return { json, agent, isTty };
 }
 
+// The x402 payment prompt happens deep inside apiGet while a spinner started out
+// here is still animating. ora repaints the current line, so it overwrote the
+// "Pay? [Y/n]" question: the user saw a payment notice with no question and no
+// sign that anything was waiting on them. Tracking the live instance lets the
+// prompt pause it — see pauseActiveSpinner.
+let activeSpinner = null;
+
 export function spinner(text, opts = {}) {
   const mode = resolveMode(opts);
   if (mode.agent || mode.json) {
     return { start() { return this; }, stop() {}, succeed() {}, fail() {}, set text(_) {} };
   }
-  return ora({ text, spinner: 'dots' }).start();
+  const instance = ora({ text, spinner: 'dots' }).start();
+  activeSpinner = instance;
+  for (const method of ['stop', 'succeed', 'fail']) {
+    const original = instance[method].bind(instance);
+    instance[method] = (...args) => {
+      if (activeSpinner === instance) activeSpinner = null;
+      return original(...args);
+    };
+  }
+  return instance;
+}
+
+/**
+ * Stop the running spinner, if any, and return a function that restarts it.
+ * A no-op when nothing is spinning, so callers need no branching.
+ *
+ * Use around anything that reads from the terminal: otherwise the prompt and the
+ * spinner fight over the same line, and the prompt loses.
+ */
+export function pauseActiveSpinner() {
+  const instance = activeSpinner;
+  if (!instance) return () => {};
+  const { text } = instance;
+  instance.stop();
+  return () => { instance.start(text); activeSpinner = instance; };
 }
 
 /**
