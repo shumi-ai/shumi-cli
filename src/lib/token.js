@@ -8,7 +8,7 @@
  * a user whether their token is well-formed and unexpired before they spend a
  * real query. The server remains the source of truth for acceptance.
  */
-export function inspectToken(token) {
+export function inspectToken(token, nowMs = Date.now()) {
   if (!token) return { kind: 'none', valid: false, expired: false, reason: 'no token' };
 
   // Opaque API keys (shumi_sk_*) can't be decoded client-side — format check only.
@@ -28,7 +28,13 @@ export function inspectToken(token) {
     return { kind: 'JWT', valid: false, expired: false, reason: 'undecodable payload' };
   }
 
-  const now = Math.floor(Date.now() / 1000);
+  // Injected so callers that already have a clock — authExpiryNotice takes one for
+  // its tests — do not compare against a different one. They did: authExpiryNotice
+  // honoured its `now` for the days-remaining maths but reached `expired` through
+  // this function's real clock, so the two disagreed the moment wall-clock time
+  // passed the fixture's expiry. The test was written deterministic and became
+  // time-dependent anyway, then started failing on 2026-08-16 with nothing changed.
+  const now = Math.floor(nowMs / 1000);
   const exp = typeof payload.exp === 'number' ? payload.exp : null;
   const expired = exp != null && exp < now;
   const expiresAt = exp != null ? new Date(exp * 1000).toISOString() : null;

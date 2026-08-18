@@ -29,7 +29,7 @@ export function authExpiryNotice(now = Date.now()) {
   const raw = getRawToken();
   if (!raw) return null;
 
-  const info = inspectToken(raw);
+  const info = inspectToken(raw, now);
   if (info.kind !== 'JWT' || info.expired || !info.expiresAt) return null;
 
   const msLeft = Date.parse(info.expiresAt) - now;
