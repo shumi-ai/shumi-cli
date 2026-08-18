@@ -49,6 +49,14 @@ export function exitCodeForErrCode(code) {
       return Exit.USER_ERROR;
     case 'RATE_LIMITED':
       return Exit.RATE_LIMITED;
+    // Declining a payment, or having no funds, is a user-side condition — the
+    // same class as a bad argument, not a server or quota fault.
+    case 'PAYMENT_REQUIRED':
+      return Exit.USER_ERROR;
+    // Ctrl-C. 130 is the shell convention for a SIGINT-terminated process, and
+    // scripts already branch on it.
+    case 'PAYMENT_ABORTED':
+      return Exit.SIGINT;
     case 'BAD_REQUEST':
       return Exit.USER_ERROR;
     case 'UPSTREAM_4XX':

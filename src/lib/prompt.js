@@ -11,6 +11,7 @@
  */
 
 import readline from 'readline';
+import { pauseActiveSpinner } from './output.js';
 import { stdin as input, stdout as output, stderr } from 'process';
 
 function isTTY() {
@@ -27,18 +28,25 @@ export function promptYesNo(question, { defaultYes = true } = {}) {
     // mode should have already short-circuited the prompt entirely.
     return Promise.resolve(defaultYes);
   }
+  // Any spinner started further up the call stack repaints this line and would
+  // erase the question. Stop it for the duration, put it back afterwards.
+  const resumeSpinner = pauseActiveSpinner();
   return new Promise((resolve) => {
+    const done = (value) => { resumeSpinner(); resolve(value); };
     const rl = readline.createInterface({ input, output });
     rl.question(question, (answer) => {
       rl.close();
       const a = (answer || '').trim().toLowerCase();
-      if (a === '') return resolve(defaultYes);
-      resolve(a === 'y' || a === 'yes');
+      if (a === '') return done(defaultYes);
+      done(a === 'y' || a === 'yes');
     });
+    // null, not false. Ctrl-C is an abort, not an answer — reporting it as
+    // "Declined." told a user who pressed Ctrl-C that they had made a choice,
+    // and mapped it to the wrong exit code.
     rl.on('SIGINT', () => {
       rl.close();
       stderr.write('\n');
-      resolve(false);
+      done(null);
     });
   });
 }

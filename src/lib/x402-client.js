@@ -93,6 +93,15 @@ function baseUnitsToUsdcString(units) {
  * exit-codes layer can map it to a clean exit. RATE_LIMITED is what the
  * existing CLI maps to exit 3 — we reuse it for any payment-block reason.
  */
+/** Ctrl-C at the payment prompt. Distinct from declining: no decision was made. */
+function paymentAborted() {
+  const err = new Error('Aborted — nothing was charged.');
+  err.category = 'PAYMENT_BLOCKED';
+  err.code = 'PAYMENT_ABORTED';
+  err.reason = 'aborted';
+  return err;
+}
+
 function paymentBlocked(reason, hint) {
   // Embed the hint in the message so renderErr's interactive mode (which only
   // prints message) still shows the actionable next-step. JSON mode also gets
@@ -100,7 +109,10 @@ function paymentBlocked(reason, hint) {
   const fullMessage = hint ? `${reason}\n  → ${hint}` : reason;
   const err = new Error(fullMessage);
   err.category = 'PAYMENT_BLOCKED';
-  err.code = 'RATE_LIMITED';
+  // Not RATE_LIMITED: no limit was hit. Declining a payment, or lacking funds, is
+  // a user-side condition, and calling it rate limiting sent both readers and
+  // exit codes looking for a quota problem that does not exist.
+  err.code = 'PAYMENT_REQUIRED';
   err.hint = hint;
   err.reason = reason;
   // Every payment-block path funnels through here, so this is the single
@@ -154,11 +166,33 @@ function truncAddress(addr) {
  * network as an anti-phishing measure — if a compromised server tries to
  * redirect payment to an unexpected address, the user sees it before signing.
  *
- *   💸 Shumi needs $0.005 USDC on base to run `coin/risk/BTC`.
+ *   💸 Shumi needs $0.005 USDC on base to run `shumi coin risk DOGE`.
  *      From  0xc624…b394 (balance $4.83)
  *      To    0xshumitreasuryaddress…1234
  *      Pay? [Y/n]
  */
+/**
+ * Turn the challenge's `resource` into the command the user actually typed.
+ *
+ * `resource` is an absolute URL — the x402 v2 spec requires one and the CDP
+ * facilitator rejects anything else. Printed raw it read
+ * `https://coinrotator-ai.onrender.com/api/cli/coin/risk/DOGE`, which names an
+ * internal host and answers a question nobody asked. What the user wants to see
+ * before paying is what they are paying for.
+ *
+ * Falls back to the raw value on an unfamiliar shape — an odd string beats
+ * throwing inside a payment prompt.
+ */
+export function commandLabelFor(resource) {
+  try {
+    const path = new URL(resource).pathname.replace(/^\/api\/cli\/?/, '').replace(/\/+$/, '');
+    if (!path) return 'shumi ask';          // the NLP route lives at /api/cli itself
+    return `shumi ${path.split('/').join(' ')}`;
+  } catch {
+    return resource;
+  }
+}
+
 function formatChallengePrompt({ priceUsdcStr, route, network, balanceFormatted, walletAddress, payToAddress }) {
   return [
     `💸 Shumi needs $${priceUsdcStr} USDC on ${network} to run \`${route}\`.`,
@@ -253,18 +287,24 @@ export async function fetchWithX402(input, init = {}) {
 
   // Decide whether to prompt or just go.
   if (!isAutoPay() && !isAgentMode()) {
-    const ok = await promptYesNo(formatChallengePrompt({
+    const answer = await promptYesNo(formatChallengePrompt({
       priceUsdcStr,
-      route: selected.resource,
+      route: commandLabelFor(selected.resource),
       network: selected.network,
       balanceFormatted,
       walletAddress,
       payToAddress: selected.payTo,
     }), { defaultYes: true });
-    if (!ok) {
+    // null means Ctrl-C. Telling someone who aborted that they "Declined"
+    // claims a decision they never made, and it is the difference between a
+    // choice (exit 1) and an interrupt (exit 130).
+    if (answer === null) {
+      throw paymentAborted();
+    }
+    if (!answer) {
       throw paymentBlocked(
-        'Declined.',
-        `Set --auto-pay to skip the prompt, or subscribe at https://shumi.ai/pricing for unlimited.`
+        'Payment declined — nothing was charged.',
+        `Run with --auto-pay to skip this prompt, or subscribe at https://shumi.ai/pricing for unlimited queries.`
       );
     }
   }
