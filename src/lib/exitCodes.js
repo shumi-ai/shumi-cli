@@ -4,12 +4,12 @@
  *   0 SUCCESS
  *   1 USER_ERROR     bad flags, malformed args
  *   2 AUTH_REQUIRED  no token / missing credentials
- *   3 RATE_LIMITED   429 / billing block
+ *   3 RATE_LIMITED   429 / billing block (incl. PAYMENT_REQUIRED)
  *   4 UPSTREAM_4XX   not-found, bad-request from server
  *   5 UPSTREAM_5XX   server error
  *   6 NETWORK        connection / timeout
  *   7 INTERNAL       unexpected client-side error
- *   130 SIGINT
+ *   130 SIGINT        interrupted, incl. PAYMENT_ABORTED (Ctrl-C at the pay prompt)
  */
 export const Exit = Object.freeze({
   SUCCESS: 0,
@@ -49,10 +49,13 @@ export function exitCodeForErrCode(code) {
       return Exit.USER_ERROR;
     case 'RATE_LIMITED':
       return Exit.RATE_LIMITED;
-    // Declining a payment, or having no funds, is a user-side condition — the
-    // same class as a bad argument, not a server or quota fault.
+    // Stays on 3. The code string changed from RATE_LIMITED to PAYMENT_REQUIRED
+    // because no limit was hit — but exit 3 is documented as "rate-limited /
+    // billing block" and pinned by agent callers, and a payment block is
+    // squarely the second half of that. Moving it to 1 would have made a
+    // declined payment indistinguishable from a bad flag.
     case 'PAYMENT_REQUIRED':
-      return Exit.USER_ERROR;
+      return Exit.RATE_LIMITED;
     // Ctrl-C. 130 is the shell convention for a SIGINT-terminated process, and
     // scripts already branch on it.
     case 'PAYMENT_ABORTED':

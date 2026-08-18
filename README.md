@@ -118,12 +118,12 @@ Pinned, documented, AI-agent-safe.
 | `0` | Success |
 | `1` | User error (bad flags) |
 | `2` | Auth required / invalid |
-| `3` | Rate-limited / billing block |
+| `3` | Rate-limited / billing block (incl. payment required or declined) |
 | `4` | Upstream 4xx |
 | `5` | Upstream 5xx |
 | `6` | Network / timeout |
 | `7` | Internal error |
-| `130` | Interrupted (SIGINT) |
+| `130` | Interrupted (SIGINT), including Ctrl-C at the payment prompt |
 
 ## Error envelope
 

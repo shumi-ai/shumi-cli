@@ -1,4 +1,4 @@
-import ora from 'ora';
+import { spinner as makeSpinner } from './output.js';
 import { query } from './api-client.js';
 import { renderText, renderRaw } from './renderer.js';
 import { capture, captureError } from './telemetry.js';
@@ -38,7 +38,16 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
     });
   } catch { /* telemetry must never break the command */ }
 
-  const spinner = ora({ text: PHASES[0].text, spinner: 'dots' }).start();
+  // Deliberately output.js's spinner, not a bare ora(): it registers the instance
+  // so pauseActiveSpinner can stop it while a prompt is on screen. This is the
+  // NLP path (shumi ask / coin / tweets / search) and it reaches the x402 payment
+  // prompt — a bare ora here left that prompt invisible, which is the whole
+  // reason the registry exists.
+  //
+  // The phase timers below only assign `.text`; ora renders on an interval that
+  // stop() clears, so a paused spinner stays quiet and picks up the newest text
+  // when it resumes.
+  const spinner = makeSpinner(PHASES[0].text);
 
   // Schedule phase transitions
   const timers = PHASES.slice(1).map(phase =>

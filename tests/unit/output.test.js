@@ -77,3 +77,54 @@ describe('renderErr', () => {
     expect(process.exitCode).toBe(Exit.INTERNAL);
   });
 });
+
+describe('pauseActiveSpinner', () => {
+  // The x402 payment prompt is written while a spinner started higher in the call
+  // stack is still animating, and ora repaints the current line — so "Pay? [Y/n]"
+  // was erased and the command looked hung. Nothing covered this, so both the
+  // registry and the pause could have been deleted with a green suite.
+  //
+  // Asserted through stop/start calls rather than ora's `isSpinning`, which stays
+  // false under vitest whether or not the spinner is running.
+  const realTTY = process.stdout.isTTY;
+
+  it('stops the running spinner and restarts it with its text on resume', async () => {
+    const { spinner, pauseActiveSpinner } = await import('../../src/lib/output.js');
+    process.stdout.isTTY = true;
+    const s = spinner('working…', {});
+    const stopSpy = vi.spyOn(s, 'stop');
+    const startSpy = vi.spyOn(s, 'start');
+    try {
+      const resume = pauseActiveSpinner();
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+
+      resume();
+      expect(startSpy).toHaveBeenCalledWith('working…');
+    } finally {
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+      s.stop();
+      process.stdout.isTTY = realTTY;
+    }
+  });
+
+  it('is a no-op when nothing is spinning, so callers need no branching', async () => {
+    const { pauseActiveSpinner } = await import('../../src/lib/output.js');
+    expect(() => pauseActiveSpinner()()).not.toThrow();
+  });
+
+  it('forgets a spinner once stopped, so a later pause cannot revive it', async () => {
+    const { spinner, pauseActiveSpinner } = await import('../../src/lib/output.js');
+    process.stdout.isTTY = true;
+    const s = spinner('working…', {});
+    s.stop();
+    const startSpy = vi.spyOn(s, 'start');
+    try {
+      pauseActiveSpinner()();
+      expect(startSpy).not.toHaveBeenCalled();
+    } finally {
+      startSpy.mockRestore();
+      process.stdout.isTTY = realTTY;
+    }
+  });
+});

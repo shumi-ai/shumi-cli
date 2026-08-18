@@ -88,11 +88,6 @@ function baseUnitsToUsdcString(units) {
   return `${whole}.${frac}`.replace(/\.?0+$/, '');
 }
 
-/**
- * Throw an Error with a category code attached, so the CLI's existing
- * exit-codes layer can map it to a clean exit. RATE_LIMITED is what the
- * existing CLI maps to exit 3 — we reuse it for any payment-block reason.
- */
 /** Ctrl-C at the payment prompt. Distinct from declining: no decision was made. */
 function paymentAborted() {
   const err = new Error('Aborted — nothing was charged.');
@@ -102,6 +97,12 @@ function paymentAborted() {
   return err;
 }
 
+/**
+ * Throw an Error with a category code attached, so the CLI's existing exit-codes
+ * layer can map it to a clean exit. The code is PAYMENT_REQUIRED — nothing was
+ * rate limited — but it still maps to exit 3, which the README documents as the
+ * billing-block code and pins for agent callers.
+ */
 function paymentBlocked(reason, hint) {
   // Embed the hint in the message so renderErr's interactive mode (which only
   // prints message) still shows the actionable next-step. JSON mode also gets
@@ -162,16 +163,6 @@ function truncAddress(addr) {
 }
 
 /**
- * Format a human-readable challenge prompt. Shows the recipient address +
- * network as an anti-phishing measure — if a compromised server tries to
- * redirect payment to an unexpected address, the user sees it before signing.
- *
- *   💸 Shumi needs $0.005 USDC on base to run `shumi coin risk DOGE`.
- *      From  0xc624…b394 (balance $4.83)
- *      To    0xshumitreasuryaddress…1234
- *      Pay? [Y/n]
- */
-/**
  * Turn the challenge's `resource` into the command the user actually typed.
  *
  * `resource` is an absolute URL — the x402 v2 spec requires one and the CDP
@@ -184,15 +175,36 @@ function truncAddress(addr) {
  * throwing inside a payment prompt.
  */
 export function commandLabelFor(resource) {
+  let pathname;
   try {
-    const path = new URL(resource).pathname.replace(/^\/api\/cli\/?/, '').replace(/\/+$/, '');
-    if (!path) return 'shumi ask';          // the NLP route lives at /api/cli itself
-    return `shumi ${path.split('/').join(' ')}`;
+    ({ pathname } = new URL(resource));
   } catch {
     return resource;
   }
+  // Anchored to a whole segment. An unanchored /^\/api\/cli\/?/ also matched
+  // mid-segment, so /api/climate/x rendered as `shumi mate x` — a confident,
+  // wrong command in the one message where the user decides to spend money.
+  const match = /^\/api\/cli(?=\/|$)(.*)$/.exec(pathname);
+  // An unfamiliar shape means we cannot name the command. SHUMI_API_URL can point
+  // anywhere, so this is reachable in normal use — show the raw value rather than
+  // inventing a command that does not exist.
+  if (!match) return resource;
+
+  const rest = match[1].replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!rest) return 'shumi ask';            // the NLP route lives at /api/cli itself
+  return `shumi ${decodeURIComponent(rest).split('/').join(' ')}`;
 }
 
+/**
+ * Format a human-readable challenge prompt. Shows the recipient address +
+ * network as an anti-phishing measure — if a compromised server tries to
+ * redirect payment to an unexpected address, the user sees it before signing.
+ *
+ *   💸 Shumi needs $0.005 USDC on base to run `shumi coin risk DOGE`.
+ *      From  0xc624…b394 (balance $4.83)
+ *      To    0xshumitreasuryaddress…1234
+ *      Pay? [Y/n]
+ */
 function formatChallengePrompt({ priceUsdcStr, route, network, balanceFormatted, walletAddress, payToAddress }) {
   return [
     `💸 Shumi needs $${priceUsdcStr} USDC on ${network} to run \`${route}\`.`,
