@@ -174,9 +174,14 @@ Releases publish to npm automatically via GitHub Actions OIDC Trusted Publishing
 
 ```bash
 git commit -am "chore(release): shumi-cli X.Y.Z"
-git tag vX.Y.Z          # must match package.json version
-git push --follow-tags  # triggers .github/workflows/publish.yml
+git tag -a vX.Y.Z -m "shumi-cli X.Y.Z"   # -a is required, see below
+git push --follow-tags                   # triggers .github/workflows/publish.yml
 ```
+
+The tag must be **annotated** (`-a`). `git push --follow-tags` pushes annotated
+tags only and skips lightweight ones **silently** — the commit lands, no tag
+reaches the remote, no workflow runs, and nothing reports a failure. That is how
+0.7.8 was first "released" without publishing.
 
 Full runbook: [CLAUDE.md](CLAUDE.md#releasing--bumping-the-cli-version).
 
