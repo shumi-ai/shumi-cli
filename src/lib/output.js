@@ -3,7 +3,7 @@ import ora from 'ora';
 import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
 import { captureError } from './telemetry.js';
 import { getUpdateInfo } from './updateCheck.js';
-import { authExpiryNotice } from './authNotice.js';
+import { authExpiryNotice, describeExpiry } from './authNotice.js';
 
 /**
  * Decide whether an error is a real fault worth capturing (5xx, network,
@@ -134,12 +134,31 @@ export function renderErr(err, opts = {}) {
       captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
     } catch { /* telemetry must never affect error rendering */ }
   }
-  // The error path matters more than the success path here: a client stuck on
-  // a version whose bug makes every command fail would otherwise never see the
-  // notice, because renderOk never runs for it.
-  process.stderr.write(JSON.stringify(withNotices(envelope)) + '\n');
-  if (!mode.json && !mode.agent) {
+  // One rendering, not two. Both were emitted before, so an interactive user read
+  // the same failure twice — once as raw JSON, once as prose:
+  //
+  //   {"schemaVersion":1,"error":{"code":"PAYMENT_REQUIRED","message":"Payment declined…"}}
+  //   ✗ Payment declined — nothing was charged.
+  //
+  // The envelope is a machine contract (README: errors always emit a stable JSON
+  // envelope on stderr so `stdout | jq` never breaks). It stays exactly as it was
+  // for --json, --agent and any non-TTY, which is every consumer that parses it.
+  // A human at a terminal is not that consumer.
+  if (mode.json || mode.agent) {
+    // The error path matters more than the success path here: a client stuck on a
+    // version whose bug makes every command fail would otherwise never see the
+    // notice, because renderOk never runs for it.
+    process.stderr.write(JSON.stringify(withNotices(envelope)) + '\n');
+  } else {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
+    // withNotices carried this, and dropping the envelope would have dropped it
+    // silently. update-notifier prints its own banner for TTYs, so only the auth
+    // warning needs a prose form — otherwise it would reach humans through
+    // `shumi doctor` alone.
+    const expiring = authExpiryNotice();
+    if (expiring) {
+      process.stderr.write(chalk.yellow(`  ⚠ session ${describeExpiry(expiring)} — run: ${expiring.action}\n`));
+    }
   }
   process.exitCode = exitCodeFromError(err);
 }
