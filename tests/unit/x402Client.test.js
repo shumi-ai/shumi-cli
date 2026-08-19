@@ -167,19 +167,18 @@ describe('commandLabelFor — what the payment prompt shows', () => {
   });
 });
 
-describe('usableRequirements — tolerant parsing across protocol versions', () => {
-  const { usableRequirements, selectRequirement, amountOf } = __testing;
-  const v1Base = {
-    scheme: 'exact', network: 'base', maxAmountRequired: '50000',
-    resource: 'https://api.shumi.ai/api/cli',
-    payTo: '0xc624d24d17CF22ece0487101eD58B1d4742bb394',
-    asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  };
-  const v2Rh = {
-    scheme: 'exact', network: 'eip155:4663', amount: '50000',
-    payTo: '0x1111111111111111111111111111111111111111',
-    asset: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
-  };
+describe('usableRequirements — tolerant, but not credulous', () => {
+  const { usableRequirements, selectRequirement, amountOf, baseUnitsToAmountString } = __testing;
+  const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+  const USDG_RH = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+  const TREASURY = '0xc624d24d17CF22ece0487101eD58B1d4742bb394';
+
+  const v1Base = { scheme: 'exact', network: 'base', maxAmountRequired: '50000',
+    resource: 'https://api.shumi.ai/api/cli', payTo: TREASURY, asset: USDC_BASE };
+  const v2Rh = { scheme: 'exact', network: 'eip155:4663', amount: '50000',
+    payTo: TREASURY, asset: USDG_RH };
+  const v2Base = { scheme: 'exact', network: 'eip155:8453', amount: '50000',
+    payTo: TREASURY, asset: USDC_BASE };
 
   it('reads the amount from either version field', () => {
     expect(amountOf(v1Base)).toBe('50000');
@@ -187,47 +186,72 @@ describe('usableRequirements — tolerant parsing across protocol versions', () 
     expect(amountOf({})).toBe(null);
   });
 
-  it('accepts v2 rows, which use `amount` rather than `maxAmountRequired`', () => {
-    // Checking only the v1 field rejected every v2 row as "incomplete", which
-    // surfaced to the user as "no payment option this client can use" — a
-    // client bug wearing a server bug's clothes.
-    const { usable, skipped } = usableRequirements([v2Rh]);
+  it('accepts v2 rows under a v2 challenge', () => {
+    const { usable, skipped } = usableRequirements([v2Rh], 2);
     expect(usable).toHaveLength(1);
     expect(skipped).toHaveLength(0);
   });
 
   it('skips rows it cannot service instead of rejecting the whole challenge', () => {
-    // The regression this whole change exists to prevent: under x402@1.2.0 an
-    // unknown network threw, so ONE unpayable row cost the client every payable
-    // one alongside it.
     const { usable, skipped } = usableRequirements([
       v1Base,
-      { scheme: 'exact', network: 'eip155:999999', amount: '1', payTo: '0xa', asset: '0xb' },
-      { scheme: 'upto', network: 'base', amount: '1', payTo: '0xa', asset: '0xb' },
+      { scheme: 'exact', network: 'eip155:999999', maxAmountRequired: '1', payTo: TREASURY, asset: USDC_BASE },
+      { scheme: 'upto', network: 'base', maxAmountRequired: '1', payTo: TREASURY, asset: USDC_BASE },
       null,
-    ]);
+    ], 1);
     expect(usable.map((r) => r.network)).toEqual(['base']);
     expect(skipped).toHaveLength(3);
   });
 
-  it('returns nothing usable rather than throwing when no row is payable', () => {
-    const { usable } = usableRequirements([{ scheme: 'exact', network: 'eip155:999999', amount: '1', payTo: '0xa', asset: '0xb' }]);
-    expect(usable).toHaveLength(0);
+  it('refuses a row whose shape cannot be signed at the challenge version', () => {
+    // A v2 challenge carrying a v1-shaped row: the signer registers v2 under
+    // eip155:* and v1 under base, so picking the v1 row throws while a payable
+    // row sits next to it. Filter it out instead.
+    const { usable } = usableRequirements([v1Base, v2Rh], 2);
+    expect(usable.map((r) => r.network)).toEqual(['eip155:4663']);
   });
 
-  it('honours SHUMI_X402_NETWORK, and falls back to the server ordering', () => {
-    const usable = [v1Base, v2Rh];
+  it('refuses an asset it cannot price against a dollar ceiling', () => {
+    // 0.03 WETH is ~$100 but renders as "0.03". Treating any token as $1 let it
+    // pass a $0.10 ceiling — and under --agent there is no prompt to catch it.
+    const weth = { scheme: 'exact', network: 'eip155:8453', amount: '30000000000000000',
+      payTo: TREASURY, asset: '0x4200000000000000000000000000000000000006' };
+    const { usable, skipped } = usableRequirements([weth], 2);
+    expect(usable).toHaveLength(0);
+    expect(skipped[0]).toMatch(/unrecognised asset/);
+  });
+
+  it('refuses rows with addresses that are not addresses', () => {
+    const bad = { scheme: 'exact', network: 'base', maxAmountRequired: '1', payTo: '0xa', asset: '0xb' };
+    const { usable, skipped } = usableRequirements([bad], 1);
+    expect(usable).toHaveLength(0);
+    expect(skipped[0]).toMatch(/invalid address/);
+  });
+
+  it('treats SHUMI_X402_NETWORK as a constraint, not a preference', () => {
     delete process.env.SHUMI_X402_NETWORK;
-    expect(selectRequirement(usable).network).toBe('base');
+    expect(selectRequirement([v2Base, v2Rh]).network).toBe('eip155:8453');
 
     process.env.SHUMI_X402_NETWORK = 'robinhood';
-    expect(selectRequirement(usable).network).toBe('eip155:4663');
+    expect(selectRequirement([v2Base, v2Rh]).network).toBe('eip155:4663');
 
-    // Pinning a chain the server did not offer must not silently pay elsewhere
-    // — it falls back to the server's first choice, which the user still sees
-    // named in the prompt before approving.
-    process.env.SHUMI_X402_NETWORK = 'polygon';
-    expect(selectRequirement(usable).network).toBe('base');
+    // Pinning a chain the server did not offer must NOT silently pay elsewhere.
+    // Under --agent there is no prompt, so a fallback is a silent chain switch.
+    process.env.SHUMI_X402_NETWORK = 'base';
+    expect(() => selectRequirement([v2Rh])).toThrow(/pinned/i);
+
+    // A typo must fail loudly rather than degrade to server choice.
+    process.env.SHUMI_X402_NETWORK = 'bse';
+    expect(() => selectRequirement([v2Base])).toThrow(/not a chain/i);
     delete process.env.SHUMI_X402_NETWORK;
+  });
+
+  it('renders amounts in the token\'s own decimals, not always six', () => {
+    // The headline conversion of this change, previously exported and never
+    // asserted at any decimal count other than 6.
+    expect(baseUnitsToAmountString(50000n, 6)).toBe('0.05');
+    expect(baseUnitsToAmountString(500n, 2)).toBe('5');
+    expect(baseUnitsToAmountString(30000000000000000n, 18)).toBe('0.03');
+    expect(baseUnitsToAmountString(1000000n, 6)).toBe('1');
   });
 });

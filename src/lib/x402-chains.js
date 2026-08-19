@@ -56,6 +56,38 @@ export const CHAINS = {
   },
 };
 
+/**
+ * Assets we are willing to pay in, per chain.
+ *
+ * This table is a safety boundary, not a convenience. The price ceiling and the
+ * daily cap are expressed in DOLLARS, but a challenge states an amount in some
+ * token's own base units — so converting one to the other requires knowing both
+ * the decimals and what the token is worth. Reading `decimals()` from the chain
+ * gives the first and never the second.
+ *
+ * Without this table the CLI asserted "1 token = $1" for whatever asset a server
+ * named. A challenge for 0.03 WETH (~$100 at 18 decimals) rendered as "0.03" and
+ * passed a $0.10 ceiling unchallenged — and under `--agent` there is no prompt to
+ * catch it. That was a regression against the old code, which compared raw base
+ * units and blocked it by accident.
+ *
+ * So: an asset we do not recognise is declined. Adding one is a deliberate act.
+ * `decimals` here is authoritative for pricing; the on-chain read is only used to
+ * cross-check and to show a balance.
+ */
+export const KNOWN_ASSETS = {
+  8453: { '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6, usdPerUnit: 1 } },
+  84532: { '0x036cbd53842c5426634e7929541ec2318f3dcf7e': { symbol: 'USDC', decimals: 6, usdPerUnit: 1 } },
+  4663: { '0x5fc5360d0400a0fd4f2af552add042d716f1d168': { symbol: 'USDG', decimals: 6, usdPerUnit: 1 } },
+  46630: { '0x7e955252e15c84f5768b83c41a71f9eba181802f': { symbol: 'USDG', decimals: 6, usdPerUnit: 1 } },
+};
+
+/** The known asset record for a chain + address, or null if we do not accept it. */
+export function knownAsset(chain, asset) {
+  if (!chain || typeof asset !== 'string') return null;
+  return KNOWN_ASSETS[chain.chainId]?.[asset.trim().toLowerCase()] || null;
+}
+
 /** Resolve whatever the server called the network to a chain we know, or null. */
 export function chainForNetwork(network) {
   const n = String(network || '').toLowerCase();

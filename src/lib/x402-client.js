@@ -31,7 +31,7 @@ import {
   sumSpendSinceUtcMidnight,
   USDC_DECIMALS,
 } from './wallet.js';
-import { chainForNetwork } from './x402-chains.js';
+import { chainForNetwork, knownAsset } from './x402-chains.js';
 import { promptYesNo, promptHidden } from './prompt.js';
 import { capture } from './telemetry.js';
 
@@ -47,7 +47,6 @@ function safeCapture(event, props) {
 const X402_VERSION = 1;
 const PRICE_CEILING_DEFAULT_USDC = '0.10';
 const DAILY_CAP_DEFAULT_USDC = '1.00';
-const DECIMALS_BASE = 10n ** BigInt(USDC_DECIMALS);
 
 /**
  * Last completed payment for this process — surfaced via getLastPaymentMeta()
@@ -162,7 +161,16 @@ function amountOf(row) {
   return row?.maxAmountRequired ?? row?.amount ?? null;
 }
 
-function usableRequirements(accepts) {
+const isAddress = (v) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v.trim());
+
+/** Which protocol version can actually sign this row's shape. */
+function rowVersion(row) {
+  if (row.amount != null) return 2;            // v2 rows carry `amount`
+  if (row.maxAmountRequired != null) return 1; // v1 rows carry `maxAmountRequired`
+  return null;
+}
+
+function usableRequirements(accepts, challengeVersion = X402_VERSION) {
   const usable = [];
   const skipped = [];
   for (const row of accepts) {
@@ -171,13 +179,36 @@ function usableRequirements(accepts) {
     // v1 calls the amount `maxAmountRequired`; v2 calls it `amount`. Checking
     // only one silently rejects every row of the other version — which reads as
     // "the server offered nothing I can use", not as a client bug.
-    if (!row.network || !row.payTo || !row.asset || amountOf(row) == null) {
+    if (!row.network || amountOf(row) == null) {
       skipped.push(`incomplete row for ${row.network || 'unknown network'}`);
       continue;
     }
+    // Validate the addresses here rather than letting viem throw at sign time,
+    // after the user has already been shown a prompt reading `0xa…0xa`.
+    if (!isAddress(row.payTo) || !isAddress(row.asset)) {
+      skipped.push(`invalid address in row for ${row.network}`);
+      continue;
+    }
     // No RPC for the chain means no honest prompt: we could not read the token's
-    // decimals, its symbol, or the wallet's balance there.
-    if (!chainForNetwork(row.network)) { skipped.push(`unsupported chain ${row.network}`); continue; }
+    // symbol or the wallet's balance there.
+    const chain = chainForNetwork(row.network);
+    if (!chain) { skipped.push(`unsupported chain ${row.network}`); continue; }
+
+    // An asset we do not recognise cannot be priced against a dollar ceiling.
+    // See KNOWN_ASSETS — this is what stops a challenge denominated in an
+    // expensive token from passing a cheap ceiling.
+    if (!knownAsset(chain, row.asset)) {
+      skipped.push(`unrecognised asset ${row.asset} on ${chain.label}`);
+      continue;
+    }
+
+    // The signer registers v2 under `eip155:*` and v1 under `base`. A row whose
+    // shape does not match the challenge's declared version cannot be signed at
+    // all, and picking it means failing while a payable row sat next to it.
+    if (rowVersion(row) !== challengeVersion) {
+      skipped.push(`${row.network} row is v${rowVersion(row)}, challenge is v${challengeVersion}`);
+      continue;
+    }
     usable.push(row);
   }
   return { usable, skipped };
@@ -190,12 +221,25 @@ function usableRequirements(accepts) {
  */
 function selectRequirement(usable) {
   const preferred = (process.env.SHUMI_X402_NETWORK || '').trim().toLowerCase();
-  if (preferred) {
-    const wanted = chainForNetwork(preferred);
-    const match = wanted && usable.find((r) => chainForNetwork(r.network)?.chainId === wanted.chainId);
-    if (match) return match;
+  if (!preferred) return usable[0];
+
+  const wanted = chainForNetwork(preferred);
+  if (!wanted) {
+    // A typo must not degrade to "pay wherever the server likes". Under --agent
+    // there is no prompt, so silent fallback is a silent chain switch.
+    throw paymentBlocked(
+      `SHUMI_X402_NETWORK="${preferred}" is not a chain this CLI knows.`,
+      'Use one of: base, base-sepolia, robinhood, robinhood-testnet — or unset it.'
+    );
   }
-  return usable[0];
+  const match = usable.find((r) => chainForNetwork(r.network)?.chainId === wanted.chainId);
+  if (!match) {
+    throw paymentBlocked(
+      `You pinned ${wanted.label}, which this server does not accept for this route.`,
+      'Unset SHUMI_X402_NETWORK to use a chain the server offers.'
+    );
+  }
+  return match;
 }
 
 /**
@@ -298,10 +342,11 @@ export async function fetchWithX402(input, init = {}) {
   // Tell the server we can read rows outside the frozen v1 network enum. It
   // withholds those rows from clients that do not say this, because an older
   // client that meets one cannot pay on ANY row — see usableRequirements.
-  const announced = {
-    ...init,
-    headers: { ...(init.headers || {}), 'X-X402-Max-Version': '2' },
-  };
+  // Spreading a Headers instance yields {} and would silently drop Authorization.
+  const baseHeaders = init.headers instanceof Headers
+    ? Object.fromEntries(init.headers.entries())
+    : { ...(init.headers || {}) };
+  const announced = { ...init, headers: { ...baseHeaders, 'X-X402-Max-Version': '2' } };
   const firstResponse = await fetch(input, announced);
   if (firstResponse.status !== 402) return firstResponse;
 
@@ -315,7 +360,8 @@ export async function fetchWithX402(input, init = {}) {
     );
   }
 
-  const { usable, skipped } = usableRequirements(accepts);
+  const challengeVersion = Number(challengeBody?.x402Version) || X402_VERSION;
+  const { usable, skipped } = usableRequirements(accepts, challengeVersion);
   if (!usable.length) {
     throw paymentBlocked(
       `No payment option this client can use${skipped.length ? ` (offered: ${skipped.join(', ')})` : '.'}`,
@@ -326,28 +372,47 @@ export async function fetchWithX402(input, init = {}) {
   // v2 lifts the resource out of the row and onto the challenge body, so read it
   // from whichever place this version put it. It is what the prompt names as the
   // thing being bought, so an empty label here is a prompt that says nothing.
-  const resourceUrl = selected.resource || challengeBody?.resource?.url || '';
+  const resourceUrl = selected.resource
+    || (typeof challengeBody?.resource === 'string' ? challengeBody.resource : challengeBody?.resource?.url)
+    || '';
 
-  // Read decimals from the token itself rather than assuming six, and take the
-  // balance on the chain being paid — not on Base, which may not be where the
-  // money is going.
+  // Decimals and dollar value come from the vetted asset table, not from the
+  // chain and never from the server. usableRequirements has already refused any
+  // asset that is not in it, so this cannot be null here.
+  const chain = chainForNetwork(selected.network);
+  const chainLabel = chain?.label ?? selected.network;
+  const asset = knownAsset(chain, selected.asset);
+  const { decimals, symbol } = asset;
+
   const walletAddress = readKeystoreAddress();
+
+  // The balance read is for DISPLAY only. Letting an RPC hiccup change the
+  // decimals used for pricing is how a prompt ends up naming the wrong token or
+  // showing 0.0005 for a $5.00 charge.
   let onChain = null;
   try {
     onChain = await balanceOnChain(selected.network, selected.asset, walletAddress);
   } catch {
-    // An RPC hiccup must not block a payment; we find out at sign time anyway.
+    // Non-fatal: we still know the price exactly, we just cannot show a balance.
   }
-  const decimals = onChain?.decimals ?? USDC_DECIMALS;
-  const symbol = onChain?.symbol ?? 'USDC';
-  const chainLabel = chainForNetwork(selected.network)?.label ?? selected.network;
 
-  const priceUnits = BigInt(amountOf(selected));
+  let priceUnits;
+  try {
+    priceUnits = BigInt(amountOf(selected));
+  } catch {
+    throw paymentBlocked(
+      `Server quoted an amount this client cannot read: ${String(amountOf(selected))}`,
+      'This is a server-side bug. Run with --raw to see the response and report it.'
+    );
+  }
+  if (priceUnits <= 0n) {
+    throw paymentBlocked('Server quoted a non-positive price.', 'Run with --raw and report it.');
+  }
   const priceStr = baseUnitsToAmountString(priceUnits, decimals);
-  // The ceiling and the daily cap are expressed in dollars, so compare in a
-  // single canonical scale rather than in whatever decimals the token uses.
-  const priceUsdcStr = priceStr;
-  const priceUsdUnits = usdcStringToBaseUnits(priceStr);
+  // Ceiling and daily cap are DOLLAR limits. Convert through the asset's known
+  // dollar value rather than assuming one token is one dollar.
+  const priceUsdcStr = baseUnitsToAmountString(priceUnits * BigInt(asset.usdPerUnit), decimals);
+  const priceUsdUnits = usdcStringToBaseUnits(priceUsdcStr);
   safeCapture('payment_required', {
     amount_usdc: priceUsdcStr,
     network: selected.network,
@@ -401,7 +466,9 @@ export async function fetchWithX402(input, init = {}) {
     const answer = await promptYesNo(formatChallengePrompt({
       priceStr,
       symbol,
-      route: commandLabelFor(resourceUrl),
+      // A blank label in a payment prompt says nothing about what is being
+      // bought. Name the gap instead of rendering an empty backtick pair.
+      route: commandLabelFor(resourceUrl) || 'this request (server sent no resource)',
       chainLabel,
       balanceFormatted,
       walletAddress,
@@ -466,7 +533,12 @@ export async function fetchWithX402(input, init = {}) {
 
   // Append receipt on success. Failures are silent (best-effort).
   if (retryResponse.ok) {
-    const respHeader = retryResponse.headers.get('x-payment-response');
+    // v2 emits `PAYMENT-RESPONSE`; v1 emitted `X-PAYMENT-RESPONSE`. Reading only
+    // the v1 spelling left `tx` null on every v2 settlement — and because the
+    // daily-cap accumulator skips receipts without a tx, the cap silently
+    // stopped accruing, which a server could trigger just by being on v2.
+    const respHeader = retryResponse.headers.get('payment-response')
+      || retryResponse.headers.get('x-payment-response');
     let tx = null;
     let payer = null;
     if (respHeader) {
