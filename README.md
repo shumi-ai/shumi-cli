@@ -95,7 +95,44 @@ shumi ask "why is HYPE pumping?"
 | `shumi commands` | Capability manifest (`--json` for agents) |
 | `shumi login\|logout\|whoami` | Wallet auth |
 | `shumi keys create\|list\|revoke` | Manage API keys for headless use |
+| `shumi wallet create\|balance\|fund` | Local payer wallet for per-query payment (see below) |
 | `shumi health` | Service connectivity |
+
+## Paying per query (x402)
+
+When your free quota runs out, priced routes answer `402` with the chains Shumi
+accepts payment on, and the CLI can pay the request directly. It signs a gasless
+authorization from a local wallet — you never send a transaction yourself and you
+never need the chain's gas token.
+
+```bash
+shumi wallet create           # one-time: an encrypted local payer wallet
+shumi wallet balance          # what it holds
+shumi wallet fund             # onramp link (USDC on Base)
+```
+
+The first time a query costs money you get a prompt naming the amount, the token,
+the chain and the recipient, so a compromised server cannot redirect payment
+without you seeing it:
+
+```
+💸 Shumi needs 0.05 USDG on Robinhood Chain to run `shumi ask`.
+   From  0xD1C8…6f99 (balance 12.00 USDG)
+   To    0xc624…b394
+   Pay? [Y/n]
+```
+
+| Variable | Behavior |
+|---|---|
+| `SHUMI_X402_PRIVATE_KEY=0x…` | Sign from an env-var key instead of the keystore. **Required** for `--agent` and other non-interactive runs. |
+| `SHUMI_X402_NETWORK=<chain>` | Pin which offered chain to pay on (`base`, `robinhood`, …). Otherwise the server's own ordering wins. |
+| `SHUMI_MAX_PRICE_USDC=0.10` | Per-call ceiling. A pricier challenge is refused, not paid. |
+| `SHUMI_DAILY_USDC_CAP=1.00` | Daily spend cap, so a looping agent cannot drain the wallet. |
+| `SHUMI_AUTO_PAY=1` | Skip the prompt (implied by `--agent`). |
+
+Prices differ per chain, because settlement does: a chain that costs more to
+settle on quotes a higher amount, and the prompt always shows the real one.
+Receipts are appended to `~/.shumi/payments.log`, one JSON object per line.
 
 ## Global flags
 

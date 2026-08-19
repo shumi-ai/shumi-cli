@@ -3,12 +3,13 @@
  *
  * Calls the upstream once. If the response isn't 402, returns it untouched.
  * If it is, we:
- *   1. Decode the x402-accepts requirements
- *   2. Enforce the local max-price ceiling (SHUMI_MAX_PRICE_USDC, default $0.10)
- *   3. In interactive mode, prompt the user; in agent / auto-pay mode, proceed
- *   4. Load the signer (env-var key, or passphrase-decrypted keystore)
- *   5. Sign + retry via x402-fetch's `createPaymentHeader`
- *   6. On 200, decode the X-PAYMENT-RESPONSE header and append a receipt
+ *   1. Decode the x402-accepts requirements, skipping rows we cannot service
+ *   2. Pick a chain (SHUMI_X402_NETWORK pins one; otherwise the server's order)
+ *   3. Enforce the local max-price ceiling (SHUMI_MAX_PRICE_USDC, default $0.10)
+ *   4. In interactive mode, prompt the user; in agent / auto-pay mode, proceed
+ *   5. Load the signer (env-var key, or passphrase-decrypted keystore)
+ *   6. Sign the chosen row via @x402/core's client and retry
+ *   7. On 200, decode the payment-response header and append a receipt
  *
  * Why we don't just use `wrapFetchWithPayment` directly from x402-fetch:
  *   - No interactive prompt — it pays silently on any 402, regardless of cost
@@ -17,18 +18,20 @@
  *   - maxValue default is a constant; we want env-var overridable
  *
  * Most of the heavy crypto (EIP-712 signing, x402 protocol semantics) is
- * delegated to `x402-fetch` and `x402/client` so we don't reimplement EIP-3009.
+ * delegated to `@x402/core` + `@x402/evm` so we don't reimplement EIP-3009.
+ * Those replaced `x402`/`x402-fetch` v1.2.0, whose network field was a closed
+ * 17-entry enum: it could not express a chain like `eip155:4663` at all, and it
+ * threw on a challenge containing one instead of ignoring the row.
  */
 
-import { createPaymentHeader, selectPaymentRequirements } from 'x402/client';
-import { PaymentRequirementsSchema } from 'x402/types';
-import { decodeXPaymentResponse } from 'x402-fetch';
+import { encodePaymentSignatureHeader, decodePaymentResponseHeader } from '@x402/core/http';
 import {
   hasWallet, hasEnvKey, hasKeystore, readKeystoreAddress,
-  loadPrivateKey, createX402Signer, getUsdcBalance, appendPaymentReceipt,
+  loadPrivateKey, createPaymentClient, balanceOnChain, appendPaymentReceipt,
   sumSpendSinceUtcMidnight,
   USDC_DECIMALS,
 } from './wallet.js';
+import { chainForNetwork, knownAsset } from './x402-chains.js';
 import { promptYesNo, promptHidden } from './prompt.js';
 import { capture } from './telemetry.js';
 
@@ -44,7 +47,6 @@ function safeCapture(event, props) {
 const X402_VERSION = 1;
 const PRICE_CEILING_DEFAULT_USDC = '0.10';
 const DAILY_CAP_DEFAULT_USDC = '1.00';
-const DECIMALS_BASE = 10n ** BigInt(USDC_DECIMALS);
 
 /**
  * Last completed payment for this process — surfaced via getLastPaymentMeta()
@@ -81,11 +83,26 @@ function usdcStringToBaseUnits(usdcStr) {
   return BigInt(combined.replace(/^0+/, '') || '0');
 }
 
-function baseUnitsToUsdcString(units) {
+/**
+ * Render base units as a decimal string using the TOKEN's decimals.
+ *
+ * The 402 gives an amount in base units and never says what they are in. USDC
+ * and USDG both happen to use 6, but that is a coincidence of two tokens and not
+ * a property of the protocol — hard-coding it means the first token with 18
+ * decimals renders a price a trillion times too small, in the prompt where the
+ * user decides to spend money.
+ */
+function baseUnitsToAmountString(units, decimals = USDC_DECIMALS) {
+  const scale = 10n ** BigInt(decimals);
   const u = BigInt(units);
-  const whole = u / DECIMALS_BASE;
-  const frac = (u % DECIMALS_BASE).toString().padStart(USDC_DECIMALS, '0');
+  const whole = u / scale;
+  const frac = (u % scale).toString().padStart(decimals, '0');
   return `${whole}.${frac}`.replace(/\.?0+$/, '');
+}
+
+/** Back-compat alias — the ceiling and cap arithmetic still works in 6dp USD. */
+function baseUnitsToUsdcString(units) {
+  return baseUnitsToAmountString(units, USDC_DECIMALS);
 }
 
 /** Ctrl-C at the payment prompt. Distinct from declining: no decision was made. */
@@ -122,10 +139,107 @@ function paymentBlocked(reason, hint) {
   return err;
 }
 
-async function selectRequirement(parsedAccepts) {
-  // Prefer USDC on Base (exact scheme). x402-fetch's selectPaymentRequirements
-  // does the right ordering when given a network filter.
-  return selectPaymentRequirements(parsedAccepts, 'base', 'exact');
+/**
+ * Which of the offered rows are we actually able to pay?
+ *
+ * Tolerant on purpose. The previous implementation ran
+ * `accepts.map((a) => PaymentRequirementsSchema.parse(a))` against `x402@1.2.0`'s
+ * CLOSED network enum, which is all-or-nothing: one row naming a chain outside
+ * the enum threw, and the client could then pay on NO row — including the Base
+ * row it understood perfectly. Measured before changing it:
+ *
+ *   accepts = [base]                  → parsed 1, selected base
+ *   accepts = [base, eip155:4663]     → THROWS invalid_enum_value
+ *
+ * So a server adding a chain would have removed the only payment option every
+ * installed client had. Skipping rows we cannot service — rather than rejecting
+ * the whole challenge — is both the spec-compatible behaviour and the only one
+ * that degrades safely.
+ */
+/** The offered amount, whichever protocol version wrote the row. */
+function amountOf(row) {
+  return row?.maxAmountRequired ?? row?.amount ?? null;
+}
+
+const isAddress = (v) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v.trim());
+
+/** Which protocol version can actually sign this row's shape. */
+function rowVersion(row) {
+  if (row.amount != null) return 2;            // v2 rows carry `amount`
+  if (row.maxAmountRequired != null) return 1; // v1 rows carry `maxAmountRequired`
+  return null;
+}
+
+function usableRequirements(accepts, challengeVersion = X402_VERSION) {
+  const usable = [];
+  const skipped = [];
+  for (const row of accepts) {
+    if (!row || typeof row !== 'object') { skipped.push('malformed row'); continue; }
+    if (row.scheme !== 'exact') { skipped.push(`scheme ${row.scheme}`); continue; }
+    // v1 calls the amount `maxAmountRequired`; v2 calls it `amount`. Checking
+    // only one silently rejects every row of the other version — which reads as
+    // "the server offered nothing I can use", not as a client bug.
+    if (!row.network || amountOf(row) == null) {
+      skipped.push(`incomplete row for ${row.network || 'unknown network'}`);
+      continue;
+    }
+    // Validate the addresses here rather than letting viem throw at sign time,
+    // after the user has already been shown a prompt reading `0xa…0xa`.
+    if (!isAddress(row.payTo) || !isAddress(row.asset)) {
+      skipped.push(`invalid address in row for ${row.network}`);
+      continue;
+    }
+    // No RPC for the chain means no honest prompt: we could not read the token's
+    // symbol or the wallet's balance there.
+    const chain = chainForNetwork(row.network);
+    if (!chain) { skipped.push(`unsupported chain ${row.network}`); continue; }
+
+    // An asset we do not recognise cannot be priced against a dollar ceiling.
+    // See KNOWN_ASSETS — this is what stops a challenge denominated in an
+    // expensive token from passing a cheap ceiling.
+    if (!knownAsset(chain, row.asset)) {
+      skipped.push(`unrecognised asset ${row.asset} on ${chain.label}`);
+      continue;
+    }
+
+    // The signer registers v2 under `eip155:*` and v1 under `base`. A row whose
+    // shape does not match the challenge's declared version cannot be signed at
+    // all, and picking it means failing while a payable row sat next to it.
+    if (rowVersion(row) !== challengeVersion) {
+      skipped.push(`${row.network} row is v${rowVersion(row)}, challenge is v${challengeVersion}`);
+      continue;
+    }
+    usable.push(row);
+  }
+  return { usable, skipped };
+}
+
+/**
+ * Pick the row to pay. `SHUMI_X402_NETWORK` lets a user pin a chain — useful
+ * when their funds are on one of them and not the other. Otherwise we take the
+ * server's own ordering, which puts the most widely supported chain first.
+ */
+function selectRequirement(usable) {
+  const preferred = (process.env.SHUMI_X402_NETWORK || '').trim().toLowerCase();
+  if (!preferred) return usable[0];
+
+  const wanted = chainForNetwork(preferred);
+  if (!wanted) {
+    // A typo must not degrade to "pay wherever the server likes". Under --agent
+    // there is no prompt, so silent fallback is a silent chain switch.
+    throw paymentBlocked(
+      `SHUMI_X402_NETWORK="${preferred}" is not a chain this CLI knows.`,
+      'Use one of: base, base-sepolia, robinhood, robinhood-testnet — or unset it.'
+    );
+  }
+  const match = usable.find((r) => chainForNetwork(r.network)?.chainId === wanted.chainId);
+  if (!match) {
+    throw paymentBlocked(
+      `You pinned ${wanted.label}, which this server does not accept for this route.`,
+      'Unset SHUMI_X402_NETWORK to use a chain the server offers.'
+    );
+  }
+  return match;
 }
 
 /**
@@ -205,10 +319,10 @@ export function commandLabelFor(resource) {
  *      To    0xshumitreasuryaddress…1234
  *      Pay? [Y/n]
  */
-function formatChallengePrompt({ priceUsdcStr, route, network, balanceFormatted, walletAddress, payToAddress }) {
+function formatChallengePrompt({ priceStr, symbol, route, chainLabel, balanceFormatted, walletAddress, payToAddress }) {
   return [
-    `💸 Shumi needs $${priceUsdcStr} USDC on ${network} to run \`${route}\`.`,
-    `   From  ${truncAddress(walletAddress)} (balance $${balanceFormatted})`,
+    `💸 Shumi needs ${priceStr} ${symbol} on ${chainLabel} to run \`${route}\`.`,
+    `   From  ${truncAddress(walletAddress)} (balance ${balanceFormatted} ${symbol})`,
     `   To    ${truncAddress(payToAddress)}`,
     `   Pay? [Y/n] `,
   ].join('\n');
@@ -225,7 +339,15 @@ function formatChallengePrompt({ priceUsdcStr, route, network, balanceFormatted,
  */
 export async function fetchWithX402(input, init = {}) {
   lastPaymentMeta = null;
-  const firstResponse = await fetch(input, init);
+  // Tell the server we can read rows outside the frozen v1 network enum. It
+  // withholds those rows from clients that do not say this, because an older
+  // client that meets one cannot pay on ANY row — see usableRequirements.
+  // Spreading a Headers instance yields {} and would silently drop Authorization.
+  const baseHeaders = init.headers instanceof Headers
+    ? Object.fromEntries(init.headers.entries())
+    : { ...(init.headers || {}) };
+  const announced = { ...init, headers: { ...baseHeaders, 'X-X402-Max-Version': '2' } };
+  const firstResponse = await fetch(input, announced);
   if (firstResponse.status !== 402) return firstResponse;
 
   // Clone the body — we'll need to retry the same request with X-PAYMENT.
@@ -238,19 +360,67 @@ export async function fetchWithX402(input, init = {}) {
     );
   }
 
-  const parsedAccepts = accepts.map((a) => PaymentRequirementsSchema.parse(a));
-  const selected = await selectRequirement(parsedAccepts);
+  const challengeVersion = Number(challengeBody?.x402Version) || X402_VERSION;
+  const { usable, skipped } = usableRequirements(accepts, challengeVersion);
+  if (!usable.length) {
+    throw paymentBlocked(
+      `No payment option this client can use${skipped.length ? ` (offered: ${skipped.join(', ')})` : '.'}`,
+      'Upgrade with `npm i -g shumi@latest`, or subscribe at https://shumi.ai/pricing.'
+    );
+  }
+  const selected = selectRequirement(usable);
+  // v2 lifts the resource out of the row and onto the challenge body, so read it
+  // from whichever place this version put it. It is what the prompt names as the
+  // thing being bought, so an empty label here is a prompt that says nothing.
+  const resourceUrl = selected.resource
+    || (typeof challengeBody?.resource === 'string' ? challengeBody.resource : challengeBody?.resource?.url)
+    || '';
 
-  const priceUnits = BigInt(selected.maxAmountRequired);
-  const priceUsdcStr = baseUnitsToUsdcString(priceUnits);
+  // Decimals and dollar value come from the vetted asset table, not from the
+  // chain and never from the server. usableRequirements has already refused any
+  // asset that is not in it, so this cannot be null here.
+  const chain = chainForNetwork(selected.network);
+  const chainLabel = chain?.label ?? selected.network;
+  const asset = knownAsset(chain, selected.asset);
+  const { decimals, symbol } = asset;
+
+  const walletAddress = readKeystoreAddress();
+
+  // The balance read is for DISPLAY only. Letting an RPC hiccup change the
+  // decimals used for pricing is how a prompt ends up naming the wrong token or
+  // showing 0.0005 for a $5.00 charge.
+  let onChain = null;
+  try {
+    onChain = await balanceOnChain(selected.network, selected.asset, walletAddress);
+  } catch {
+    // Non-fatal: we still know the price exactly, we just cannot show a balance.
+  }
+
+  let priceUnits;
+  try {
+    priceUnits = BigInt(amountOf(selected));
+  } catch {
+    throw paymentBlocked(
+      `Server quoted an amount this client cannot read: ${String(amountOf(selected))}`,
+      'This is a server-side bug. Run with --raw to see the response and report it.'
+    );
+  }
+  if (priceUnits <= 0n) {
+    throw paymentBlocked('Server quoted a non-positive price.', 'Run with --raw and report it.');
+  }
+  const priceStr = baseUnitsToAmountString(priceUnits, decimals);
+  // Ceiling and daily cap are DOLLAR limits. Convert through the asset's known
+  // dollar value rather than assuming one token is one dollar.
+  const priceUsdcStr = baseUnitsToAmountString(priceUnits * BigInt(asset.usdPerUnit), decimals);
+  const priceUsdUnits = usdcStringToBaseUnits(priceUsdcStr);
   safeCapture('payment_required', {
     amount_usdc: priceUsdcStr,
     network: selected.network,
-    route: selected.resource,
+    route: resourceUrl,
     auto_pay: isAutoPay(),
   });
   const ceilingUnits = usdcStringToBaseUnits(maxPriceCeilingUsdc());
-  if (priceUnits > ceilingUnits) {
+  if (priceUsdUnits > ceilingUnits) {
     throw paymentBlocked(
       `Price $${priceUsdcStr} exceeds your max ceiling $${maxPriceCeilingUsdc()}.`,
       `Override with: SHUMI_MAX_PRICE_USDC=${priceUsdcStr} <your command>`
@@ -264,7 +434,7 @@ export async function fetchWithX402(input, init = {}) {
   const spentToday = sumSpendSinceUtcMidnight();
   const capUnits = usdcStringToBaseUnits(dailyCapUsdc());
   const spentTodayUnits = usdcStringToBaseUnits(spentToday.toFixed(USDC_DECIMALS));
-  if (spentTodayUnits + priceUnits > capUnits) {
+  if (spentTodayUnits + priceUsdUnits > capUnits) {
     throw paymentBlocked(
       `Daily cap reached: $${spentToday.toFixed(4)} spent + $${priceUsdcStr} would exceed $${dailyCapUsdc()}.`,
       `Raise with: SHUMI_DAILY_USDC_CAP=5.00 <your command>, or wait until UTC midnight.`
@@ -278,31 +448,28 @@ export async function fetchWithX402(input, init = {}) {
     );
   }
 
-  // Get a quick balance read for the prompt + sanity-check.
-  const walletAddress = readKeystoreAddress();
-  let balanceFormatted = '?';
-  let balanceRaw = 0n;
-  try {
-    const b = await getUsdcBalance(walletAddress);
-    balanceFormatted = b.formatted;
-    balanceRaw = b.raw;
-  } catch {
-    // Don't block on RPC hiccup; we'll find out at sign time anyway.
-  }
+  const balanceFormatted = onChain?.formatted ?? '?';
+  const balanceRaw = onChain?.raw ?? 0n;
 
   if (balanceRaw > 0n && balanceRaw < priceUnits) {
     throw paymentBlocked(
-      `Insufficient USDC. You have $${balanceFormatted}; need $${priceUsdcStr}.`,
-      `Run \`shumi wallet fund\` for an onramp link, or send USDC on Base to ${walletAddress}.`
+      `Insufficient ${symbol} on ${chainLabel}. You have ${balanceFormatted}; need ${priceStr}.`,
+      // Name the chain: the funding advice for Base is not the advice for
+      // another chain, and "send funds" without saying where is not advice.
+      `Send ${symbol} on ${chainLabel} to ${walletAddress}` +
+        (chainForNetwork(selected.network)?.chainId === 8453 ? ', or run `shumi wallet fund` for an onramp link.' : '.')
     );
   }
 
   // Decide whether to prompt or just go.
   if (!isAutoPay() && !isAgentMode()) {
     const answer = await promptYesNo(formatChallengePrompt({
-      priceUsdcStr,
-      route: commandLabelFor(selected.resource),
-      network: selected.network,
+      priceStr,
+      symbol,
+      // A blank label in a payment prompt says nothing about what is being
+      // bought. Name the gap instead of rendering an empty backtick pair.
+      route: commandLabelFor(resourceUrl) || 'this request (server sent no resource)',
+      chainLabel,
       balanceFormatted,
       walletAddress,
       payToAddress: selected.payTo,
@@ -324,18 +491,30 @@ export async function fetchWithX402(input, init = {}) {
   // Unlock + sign.
   const passphrase = await resolvePassphrase();
   const privateKey = loadPrivateKey({ passphrase });
-  const signer = await createX402Signer(privateKey);
+  const paymentClient = createPaymentClient(privateKey);
 
   let paymentHeader;
   try {
-    paymentHeader = await createPaymentHeader(signer, X402_VERSION, selected);
+    // Hand the client a challenge containing only the row we chose, so the
+    // signature is unambiguously for that chain and its EIP-712 domain. The
+    // version comes from the challenge: our server still speaks v1 for the Base
+    // row, and signing a v1 row as v2 produces a payload the server cannot match.
+    const payload = await paymentClient.createPaymentPayload({
+      x402Version: Number(challengeBody?.x402Version) || X402_VERSION,
+      ...(challengeBody?.resource && { resource: challengeBody.resource }),
+      accepts: [selected],
+    });
+    paymentHeader = encodePaymentSignatureHeader(payload);
   } catch (err) {
-    throw paymentBlocked(`Signing failed: ${err.message}`, 'Check your wallet has USDC on Base.');
+    throw paymentBlocked(
+      `Signing failed: ${err.message}`,
+      `Check your wallet holds ${symbol} on ${chainLabel}.`
+    );
   }
 
   const retryInit = {
-    ...init,
-    headers: { ...(init.headers || {}), 'X-PAYMENT': paymentHeader },
+    ...announced,
+    headers: { ...(announced.headers || {}), 'X-PAYMENT': paymentHeader },
   };
   const retryResponse = await fetch(input, retryInit);
 
@@ -354,18 +533,23 @@ export async function fetchWithX402(input, init = {}) {
 
   // Append receipt on success. Failures are silent (best-effort).
   if (retryResponse.ok) {
-    const respHeader = retryResponse.headers.get('x-payment-response');
+    // v2 emits `PAYMENT-RESPONSE`; v1 emitted `X-PAYMENT-RESPONSE`. Reading only
+    // the v1 spelling left `tx` null on every v2 settlement — and because the
+    // daily-cap accumulator skips receipts without a tx, the cap silently
+    // stopped accruing, which a server could trigger just by being on v2.
+    const respHeader = retryResponse.headers.get('payment-response')
+      || retryResponse.headers.get('x-payment-response');
     let tx = null;
     let payer = null;
     if (respHeader) {
       try {
-        const decoded = decodeXPaymentResponse(respHeader);
+        const decoded = decodePaymentResponseHeader(respHeader);
         tx = decoded?.transaction || null;
         payer = decoded?.payer || null;
       } catch {}
     }
     appendPaymentReceipt({
-      route: selected.resource,
+      route: resourceUrl,
       amountUsdc: priceUsdcStr,
       tx,
       payer,
@@ -376,8 +560,10 @@ export async function fetchWithX402(input, init = {}) {
     // would mean a paying agent has no programmatic visibility into spend.
     lastPaymentMeta = {
       amountUsdc: priceUsdcStr,
-      route: selected.resource,
+      asset: symbol,
+      route: resourceUrl,
       network: selected.network,
+      chain: chainLabel,
       tx,
       payer,
       wallet: walletAddress,
@@ -386,13 +572,13 @@ export async function fetchWithX402(input, init = {}) {
     safeCapture('payment_completed', {
       amount_usdc: priceUsdcStr,
       network: selected.network,
-      route: selected.resource,
+      route: resourceUrl,
       tx_hash: truncHash(tx),
       wallet_truncated: truncAddress(walletAddress),
     });
     if (!isAgentMode()) {
       const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
-      process.stderr.write(`💸 Paid $${priceUsdcStr} USDC${txDisplay}\n`);
+      process.stderr.write(`💸 Paid ${priceStr} ${symbol} on ${chainLabel}${txDisplay}\n`);
     }
   }
 
@@ -403,6 +589,10 @@ export async function fetchWithX402(input, init = {}) {
 export const __testing = {
   usdcStringToBaseUnits,
   baseUnitsToUsdcString,
+  baseUnitsToAmountString,
+  usableRequirements,
+  selectRequirement,
+  amountOf,
   isAutoPay,
   isAgentMode,
   maxPriceCeilingUsdc,
