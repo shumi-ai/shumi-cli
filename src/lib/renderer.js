@@ -11,6 +11,59 @@ import { markedTerminal } from 'marked-terminal';
  * below rather than worked around in prompts. See each patch for the evidence.
  */
 
+
+const ESC = String.fromCharCode(27);
+const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
+
+/** Visible width, ignoring SGR escape sequences. */
+function visibleLength(text) {
+  return [...String(text).replace(ANSI_RE, '')].length;
+}
+
+/**
+ * Re-wrap an already-rendered block to the terminal, preserving each line's
+ * leading whitespace and hanging the continuation under the text rather than
+ * under the bullet.
+ *
+ * marked-terminal's `reflowText` only reaches paragraphs and blockquotes. List
+ * items are assembled in `listitem`/`list` and never reflowed, so a long bullet
+ * ran to 184 characters in a 100-column terminal — measured on a real
+ * `shumi ask` answer. Wrapping happens after rendering because that is the only
+ * point where the indent marked-terminal adds is known.
+ *
+ * Words are measured by VISIBLE length so colour codes neither count toward the
+ * budget nor get split in half.
+ */
+function wrapBlock(block, width) {
+  if (!Number.isFinite(width) || width < 20) return block;
+  return block
+    .split('\n')
+    .map((line) => {
+      if (visibleLength(line) <= width) return line;
+      const indent = (line.match(/^\s*/) || [''])[0];
+      // Hang continuations past a bullet or "1." marker so the text lines up.
+      const marker = (line.slice(indent.length).match(/^(?:[*\-\u2022]\s+|\d+\.\s+)/) || [''])[0];
+      const hang = indent + ' '.repeat(visibleLength(marker));
+      const words = line.trim().split(/\s+/);
+      const out = [];
+      let current = indent;
+      let currentIsFirst = true;
+      for (const word of words) {
+        const candidate = current === (currentIsFirst ? indent : hang) ? current + word : `${current} ${word}`;
+        if (visibleLength(candidate) > width && current.trim()) {
+          out.push(current);
+          current = hang + word;
+          currentIsFirst = false;
+        } else {
+          current = candidate;
+        }
+      }
+      if (current.trim()) out.push(current);
+      return out.join('\n');
+    })
+    .join('\n');
+}
+
 /** Terminal width, with a sane floor for pipes and CI where columns is undefined. */
 function terminalWidth() {
   const cols = process.stdout.columns;
@@ -127,6 +180,16 @@ function buildMarked() {
     return `\n${table.toString()}\n\n`;
   };
 
+  // Patch 3 — wrap list blocks to the terminal.
+  //
+  // marked-terminal's reflowText only reaches paragraphs and blockquotes, so a
+  // long bullet ran to 184 characters in a 100-column terminal. Wrapping after
+  // the base renderer runs is the only point at which the indent it adds is known.
+  const baseList = renderer.list;
+  renderer.list = function patchedList(token) {
+    return wrapBlock(baseList.call(this, token), terminalWidth());
+  };
+
   return new Marked(extension);
 }
 
@@ -151,4 +214,4 @@ export function renderRaw(data) {
   console.log(JSON.stringify(data, null, 2));
 }
 
-export const __internal = { fitColumns, cellWidth, terminalWidth };
+export const __internal = { fitColumns, cellWidth, terminalWidth, wrapBlock, visibleLength };

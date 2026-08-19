@@ -53,6 +53,19 @@ ordered lists; that was too narrow.
 A model emitting a stray delimiter line produces a table token with an empty
 header and no rows, which was drawn as an empty box. Now suppressed.
 
+## 5. Long list items ran past the terminal
+
+Found by running the fixed build against production rather than trusting the
+table fix: bullets reached **184 characters in a 100-column terminal**.
+
+**Cause.** marked-terminal's `reflowText` option only reaches paragraphs and
+blockquotes. List items are assembled in `listitem`/`list` and never reflowed.
+
+**Fix.** The rendered list block is re-wrapped afterwards — the only point at
+which the indent marked-terminal adds is known. Continuations hang under the
+text rather than under the bullet, and width is measured ignoring SGR escapes so
+colour codes neither count toward the budget nor get split in half.
+
 ## Trap worth remembering
 
 Every function `markedTerminal()` installs copies `this.parser` onto its internal
