@@ -107,3 +107,41 @@ describe('robustness', () => {
     expect(out.replace(ANSI, '')).toContain('No response received.');
   });
 });
+
+describe('long list items wrap to the terminal', () => {
+  // marked-terminal's reflowText only reaches paragraphs and blockquotes, so a
+  // bullet ran to 184 characters in a 100-column terminal on a real answer.
+  const LONG = `- ${'word '.repeat(60)}\n- short\n\n1. ${'token '.repeat(50)}\n`;
+
+  for (const columns of [60, 80, 100, 120]) {
+    it(`keeps every line inside ${columns} columns`, async () => {
+      const out = await render(LONG, columns);
+      expect(widest(out)).toBeLessThanOrEqual(columns);
+    });
+  }
+
+  it('hangs the continuation under the text, not under the bullet', async () => {
+    const out = await render(LONG, 60);
+    const lines = out.split('\n').filter((l) => l.trim());
+    const bullet = lines.findIndex((l) => /[*\u2022]\s/.test(l));
+    const indentOf = (l) => (l.match(/^\s*/) || [''])[0].length;
+    // The wrapped line starts further in than the bullet line, lining up with
+    // the text rather than the marker.
+    expect(indentOf(lines[bullet + 1])).toBeGreaterThan(indentOf(lines[bullet]));
+  });
+
+  it('does not touch a list that already fits', async () => {
+    const out = await render('- short one\n- short two\n', 100);
+    expect(out.replace(ANSI, '')).toContain('short one');
+    expect(out.split('\n').filter((l) => l.includes('short one')).length).toBe(1);
+  });
+
+  it('measures visible width, so colour codes neither count nor get split', async () => {
+    const { __internal } = await import('../../src/lib/renderer.js');
+    const coloured = `${ESC}[1mbold${ESC}[0m`;
+    expect(__internal.visibleLength(coloured)).toBe(4);
+    const wrapped = __internal.wrapBlock(`  * ${coloured} ${'x'.repeat(90)}`, 40);
+    // The escape sequence survives intact rather than being cut mid-code.
+    expect(wrapped).toContain(coloured);
+  });
+});
