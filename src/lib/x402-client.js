@@ -33,6 +33,7 @@ import {
 } from './wallet.js';
 import { chainForNetwork, knownAsset } from './x402-chains.js';
 import { promptYesNo, promptHidden } from './prompt.js';
+import { pauseActiveSpinner } from './output.js';
 import { capture } from './telemetry.js';
 
 /** Truncate a tx hash / wallet for telemetry — never the full value. */
@@ -577,6 +578,11 @@ export async function fetchWithX402(input, init = {}) {
       wallet_truncated: truncAddress(walletAddress),
     });
     if (!isAgentMode()) {
+      // Stop the spinner first. Writing over a live spinner produced
+      //   ⠋ generating response💸 Paid 0.05 USDC on Base · tx 0x82f49af1…
+      // — the receipt glued to the spinner frame. Same defect as the payment
+      // prompt had, same fix; this write site was missed when that was done.
+      pauseActiveSpinner();
       const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
       process.stderr.write(`💸 Paid ${priceStr} ${symbol} on ${chainLabel}${txDisplay}\n`);
     }
