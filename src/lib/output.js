@@ -4,6 +4,7 @@ import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
 import { captureError } from './telemetry.js';
 import { getUpdateInfo } from './updateCheck.js';
 import { authExpiryNotice, describeExpiry } from './authNotice.js';
+import { applyContextGuard } from './spill.js';
 
 /**
  * Decide whether an error is a real fault worth capturing (5xx, network,
@@ -91,7 +92,11 @@ export function pauseActiveSpinner() {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    process.stdout.write(JSON.stringify(withNotices(envelope)) + '\n');
+    // Context guard sits here rather than in typedCmd because 20 of the 36
+    // commands — signal, regime, coin, ask, search, dashboard, watch — never go
+    // through typedCmd, and those include the largest payloads. One choke point
+    // covers all of them. See lib/spill.js for when it engages.
+    process.stdout.write(JSON.stringify(applyContextGuard(withNotices(envelope), { mode })) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);

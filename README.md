@@ -130,6 +130,34 @@ without you seeing it:
 | `SHUMI_DAILY_USDC_CAP=1.00` | Daily spend cap, so a looping agent cannot drain the wallet. |
 | `SHUMI_AUTO_PAY=1` | Skip the prompt (implied by `--agent`). |
 
+### Context guard
+
+Some answers are large — `sentiment market` is close to a megabyte — and in
+`--agent` mode that lands straight in a model's context window. Rather than
+truncate a response you have already paid for, the CLI writes the **full**
+envelope to disk and inlines a shape-preserving preview plus the path:
+
+```json
+{ "data": { "verdict": "strong-bull", "raw": { "…": "first few of each list" } },
+  "_spill": { "path": "~/.shumi/spill/shumi-….json", "bytes": 938820,
+              "preview_is_partial": true,
+              "hint": "… read it with a sub-agent or query it with jq …" } }
+```
+
+Nothing is lost. The agent decides whether the full file is worth opening, and
+can hand it to a sub-agent or `jq` instead of inlining it.
+
+| Variable | Behavior |
+|---|---|
+| `SHUMI_MAX_OUTPUT_BYTES=50000` | Spill above this size. `0` disables spilling entirely. |
+| `SHUMI_SPILL_DIR=~/.shumi/spill` | Where full responses are written. Files older than 24h are pruned. |
+
+Spilling is **on by default only in `--agent` mode**. A plain
+`shumi … --json > out.json` is never rewritten — `--json` is auto-enabled for any
+non-TTY, so we cannot tell your redirect from an agent's pipe, and corrupting a
+file on disk is worse than a large context. Set `SHUMI_MAX_OUTPUT_BYTES` to opt
+in anywhere else.
+
 Prices differ per chain, because settlement does: a chain that costs more to
 settle on quotes a higher amount, and the prompt always shows the real one.
 Receipts are appended to `~/.shumi/payments.log`, one JSON object per line.
