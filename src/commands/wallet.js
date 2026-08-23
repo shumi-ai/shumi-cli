@@ -113,6 +113,8 @@ export function registerWalletCommand(program) {
     .command('receipts')
     .description('show recent x402 payment receipts (last 20)')
     .option('--limit <n>', 'how many receipts to show', '20')
+    .option('--since <date>', 'only receipts after this date (YYYY-MM-DD)')
+    .option('--until <date>', 'only receipts before this date (YYYY-MM-DD)')
     .action(async function (cmdOpts) {
       const opts = this.optsWithGlobals();
       try {
@@ -124,11 +126,21 @@ export function registerWalletCommand(program) {
           });
           return;
         }
-        const lines = readFileSync(logPath, 'utf8')
-          .split('\n').filter(Boolean).slice(-limit);
-        const receipts = lines.map((l) => {
-          try { return JSON.parse(l); } catch { return { raw: l }; }
-        });
+        let receipts = readFileSync(logPath, 'utf8')
+          .split('\n').filter(Boolean)
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter(Boolean);
+
+        if (cmdOpts.since) {
+          const since = cmdOpts.since;
+          receipts = receipts.filter((r) => r.ts && r.ts >= since);
+        }
+        if (cmdOpts.until) {
+          const until = cmdOpts.until + 'T23:59:59';
+          receipts = receipts.filter((r) => r.ts && r.ts <= until);
+        }
+        receipts = receipts.slice(-limit);
+
         const totalUsdc = receipts.reduce((sum, r) => sum + (parseFloat(r.amountUsdc) || 0), 0);
         renderOk({
           data: {
