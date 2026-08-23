@@ -115,6 +115,7 @@ export function registerWalletCommand(program) {
     .option('--limit <n>', 'how many receipts to show', '20')
     .option('--since <date>', 'only receipts after this date (YYYY-MM-DD)')
     .option('--until <date>', 'only receipts before this date (YYYY-MM-DD)')
+    .option('--export <format>', 'export as csv (stdout only, no envelope)')
     .action(async function (cmdOpts) {
       const opts = this.optsWithGlobals();
       try {
@@ -140,6 +141,15 @@ export function registerWalletCommand(program) {
           receipts = receipts.filter((r) => r.ts && r.ts <= until);
         }
         receipts = receipts.slice(-limit);
+
+        if (cmdOpts.export === 'csv') {
+          const header = 'timestamp,amountUsdc,route,tx,payer,wallet';
+          const rows = receipts.map((r) =>
+            [r.ts, r.amountUsdc, r.route, r.tx, r.payer, r.wallet].map(csvEscape).join(',')
+          );
+          process.stdout.write(header + '\n' + rows.join('\n') + '\n');
+          return;
+        }
 
         const totalUsdc = receipts.reduce((sum, r) => sum + (parseFloat(r.amountUsdc) || 0), 0);
         renderOk({
@@ -269,4 +279,13 @@ export function registerWalletCommand(program) {
         renderErr(err, opts);
       }
     });
+}
+
+function csvEscape(val) {
+  if (val === null || val === undefined) return '';
+  const s = String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
 }
