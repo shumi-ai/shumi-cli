@@ -119,7 +119,15 @@ export function registerWalletCommand(program) {
     .action(async function (cmdOpts) {
       const opts = this.optsWithGlobals();
       try {
+        if (cmdOpts.export && cmdOpts.export !== 'csv') {
+          renderErr({ message: `Unsupported export format: ${cmdOpts.export}`, hint: 'Only `--export csv` is supported.' }, opts);
+          return;
+        }
         const limit = parseInt(cmdOpts.limit, 10) || 20;
+        // An export defaults to the full (filtered) log — a silent 20-row cap
+        // would truncate exactly the "export this month" case the flag exists
+        // for. An explicit --limit still applies.
+        const limitExplicit = this.getOptionValueSource('limit') !== 'default';
         const logPath = join(homedir(), '.shumi', 'payments.log');
         if (!existsSync(logPath)) {
           renderOk({ data: { receipts: [], note: 'No payment receipts yet.' } }, opts, () => {
@@ -137,10 +145,13 @@ export function registerWalletCommand(program) {
           receipts = receipts.filter((r) => r.ts && r.ts >= since);
         }
         if (cmdOpts.until) {
-          const until = cmdOpts.until + 'T23:59:59';
-          receipts = receipts.filter((r) => r.ts && r.ts <= until);
+          // Compare date prefixes: `ts <= until + 'T23:59:59'` loses receipts
+          // in the final second of the day (toISOString carries milliseconds).
+          receipts = receipts.filter((r) => r.ts && r.ts.slice(0, 10) <= cmdOpts.until);
         }
-        receipts = receipts.slice(-limit);
+        if (cmdOpts.export !== 'csv' || limitExplicit) {
+          receipts = receipts.slice(-limit);
+        }
 
         if (cmdOpts.export === 'csv') {
           const header = 'timestamp,amountUsdc,route,tx,payer,wallet';
