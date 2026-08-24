@@ -1,7 +1,7 @@
 {
   "name": "shumi",
-  "version": "0.8.1",
-  "description": "Shumi \u2014 crypto trade intelligence from your terminal",
+  "version": "0.8.2",
+  "description": "Shumi — crypto trade intelligence from your terminal",
   "type": "module",
   "bin": {
     "shumi": "bin/shumi.js"
