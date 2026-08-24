@@ -86,3 +86,19 @@ describe('magnitudes survive formatting', () => {
     expect(out).toMatch(/5971/);
   });
 });
+
+describe('usd-suffixed big numbers stay compact', () => {
+  // `usd` is matched only as the whole key. Treating it as a mere token also
+  // caught market_cap_usd and volume_usd and sent them to the price formatter,
+  // turning "2.24T" into "$2,242,903,464,384".
+  it('formats market_cap_usd and volume_usd compactly, not as prices', () => {
+    expect(render('market_cap_usd', 2242903464384)).toMatch(/2\.24T/);
+    expect(render('volume_usd', 42000000000)).toMatch(/42\.00B/);
+    expect(render('market_cap_usd', 2242903464384)).not.toMatch(/\$/);
+  });
+
+  it('still treats a bare usd key and price_usd as prices', () => {
+    expect(render('usd', 79028.9)).toMatch(/\$79,029/);
+    expect(render('price_usd', 79028.9)).toMatch(/\$79,029/);
+  });
+});

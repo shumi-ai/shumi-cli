@@ -257,8 +257,12 @@ function formatNumber(n, key) {
   // formatting 5971.13 as "$5,971" invents a currency the field does not have.
   if (has('ratio')) return formatRatio(n);
 
-  // Price-like fields
-  if (has('price') || has('priceusd') || has('usd')) {
+  // Price-like fields. `usd` is matched only as the WHOLE key, mirroring the
+  // original `k === 'usd'`: as a mere token it also caught market_cap_usd and
+  // volume_usd, which are big numbers and belong to the compact branch below.
+  // Widening that check turned "2.24T" into "$2,242,903,464,384".
+  const joined = t.join('');
+  if (has('price') || joined === 'usd' || joined === 'priceusd') {
     return formatPrice(n);
   }
 
