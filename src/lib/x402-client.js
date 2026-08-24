@@ -106,6 +106,67 @@ function baseUnitsToUsdcString(units) {
   return baseUnitsToAmountString(units, USDC_DECIMALS);
 }
 
+/**
+ * One line of plain English for the gate block the server attaches to a 402:
+ *
+ *   { tier: 'free', quota: { used: 1, limit: 1, period: 'day' },
+ *     reset_at: '2026-08-25T00:00:00.000Z', upgrade_url: '…' }
+ *
+ * Returns null when there is nothing useful to say, so callers can fall back to
+ * the bare reason rather than print an empty preamble.
+ */
+function describeGate(gate) {
+  if (!gate || typeof gate !== 'object') return null;
+  const quota = gate.quota && typeof gate.quota === 'object' ? gate.quota : gate;
+  const { used, limit, period } = quota;
+  if (!Number.isFinite(Number(limit))) return null;
+
+  const tier = typeof gate.tier === 'string' ? gate.tier : null;
+  const window = typeof period === 'string' ? ` per ${period}` : '';
+  const head = `Out of quota: ${used} of ${limit}${window} used${tier ? ` on the ${tier} tier` : ''}.`;
+
+  const parts = [head];
+  const reset = resetPhrase(gate.reset_at);
+  if (reset) parts.push(`Resets ${reset}.`);
+  if (typeof gate.upgrade_url === 'string') parts.push(`Upgrade: ${gate.upgrade_url}`);
+  return parts.join(' ');
+}
+
+/** "in 4h" / "in 12m" / an ISO date when it is further out or unparseable. */
+function resetPhrase(resetAt) {
+  if (typeof resetAt !== 'string') return null;
+  const ms = Date.parse(resetAt) - Date.now();
+  if (!Number.isFinite(ms)) return null;
+  if (ms <= 0) return 'now';
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.round(ms / 3600000);
+  if (hours < 48) return `in ${hours}h`;
+  return `on ${resetAt.slice(0, 10)}`;
+}
+
+/**
+ * Prefix a payment block with the reason payment was being asked for.
+ *
+ * Applied at the single boundary below rather than inside paymentBlocked: there
+ * are 17 throw sites across the payment flow, and the gate belongs to ONE
+ * request. Module-scoped state would race — dashboard fires five apiGet calls
+ * concurrently and coin risk fans out per symbol, so a second request resetting
+ * the shared value between the first request's 402 and its throw would attach
+ * the wrong gate, or none.
+ */
+function withGateContext(err, gate) {
+  if (!err || err.category !== 'PAYMENT_BLOCKED' || err.gate) return err;
+  const why = describeGate(gate);
+  if (!why) return err;
+  err.gate = gate;
+  // `why` leads, because the reason alone answers the wrong question: a user
+  // out of free quota was told "No passphrase provided." — a sentence about
+  // wallets, when what happened is that they hit their daily limit.
+  err.message = `${why}\n  ${err.message.split('\n').join('\n  ')}`;
+  return err;
+}
+
 /** Ctrl-C at the payment prompt. Distinct from declining: no decision was made. */
 function paymentAborted() {
   const err = new Error('Aborted — nothing was charged.');
@@ -354,245 +415,253 @@ export async function fetchWithX402(input, init = {}) {
   // Clone the body — we'll need to retry the same request with X-PAYMENT.
   const challengeBody = await firstResponse.clone().json().catch(() => ({}));
   const accepts = challengeBody?.accepts;
-  if (!Array.isArray(accepts) || accepts.length === 0) {
-    throw paymentBlocked(
-      'Server returned 402 without payment requirements.',
-      'This is a server-side bug. Run with --raw to see the response and report it.'
-    );
-  }
+  const gate = challengeBody?.gate ?? null;
 
-  const challengeVersion = Number(challengeBody?.x402Version) || X402_VERSION;
-  const { usable, skipped } = usableRequirements(accepts, challengeVersion);
-  if (!usable.length) {
-    throw paymentBlocked(
-      `No payment option this client can use${skipped.length ? ` (offered: ${skipped.join(', ')})` : '.'}`,
-      'Upgrade with `npm i -g shumi@latest`, or subscribe at https://shumi.ai/pricing.'
-    );
-  }
-  const selected = selectRequirement(usable);
-  // v2 lifts the resource out of the row and onto the challenge body, so read it
-  // from whichever place this version put it. It is what the prompt names as the
-  // thing being bought, so an empty label here is a prompt that says nothing.
-  const resourceUrl = selected.resource
-    || (typeof challengeBody?.resource === 'string' ? challengeBody.resource : challengeBody?.resource?.url)
-    || '';
-
-  // Decimals and dollar value come from the vetted asset table, not from the
-  // chain and never from the server. usableRequirements has already refused any
-  // asset that is not in it, so this cannot be null here.
-  const chain = chainForNetwork(selected.network);
-  const chainLabel = chain?.label ?? selected.network;
-  const asset = knownAsset(chain, selected.asset);
-  const { decimals, symbol } = asset;
-
-  const walletAddress = readKeystoreAddress();
-
-  // The balance read is for DISPLAY only. Letting an RPC hiccup change the
-  // decimals used for pricing is how a prompt ends up naming the wrong token or
-  // showing 0.0005 for a $5.00 charge.
-  let onChain = null;
   try {
-    onChain = await balanceOnChain(selected.network, selected.asset, walletAddress);
-  } catch {
-    // Non-fatal: we still know the price exactly, we just cannot show a balance.
-  }
-
-  let priceUnits;
-  try {
-    priceUnits = BigInt(amountOf(selected));
-  } catch {
-    throw paymentBlocked(
-      `Server quoted an amount this client cannot read: ${String(amountOf(selected))}`,
-      'This is a server-side bug. Run with --raw to see the response and report it.'
-    );
-  }
-  if (priceUnits <= 0n) {
-    throw paymentBlocked('Server quoted a non-positive price.', 'Run with --raw and report it.');
-  }
-  const priceStr = baseUnitsToAmountString(priceUnits, decimals);
-  // Ceiling and daily cap are DOLLAR limits. Convert through the asset's known
-  // dollar value rather than assuming one token is one dollar.
-  const priceUsdcStr = baseUnitsToAmountString(priceUnits * BigInt(asset.usdPerUnit), decimals);
-  const priceUsdUnits = usdcStringToBaseUnits(priceUsdcStr);
-  safeCapture('payment_required', {
-    amount_usdc: priceUsdcStr,
-    network: selected.network,
-    route: resourceUrl,
-    auto_pay: isAutoPay(),
-  });
-  const ceilingUnits = usdcStringToBaseUnits(maxPriceCeilingUsdc());
-  if (priceUsdUnits > ceilingUnits) {
-    throw paymentBlocked(
-      `Price $${priceUsdcStr} exceeds your max ceiling $${maxPriceCeilingUsdc()}.`,
-      `Override with: SHUMI_MAX_PRICE_USDC=${priceUsdcStr} <your command>`
-    );
-  }
-
-  // Daily cap: spent-today + this-call must stay under SHUMI_DAILY_USDC_CAP.
-  // Protects against an autonomous agent looping calls and burning the wallet.
-  // The per-call ceiling above is necessary but not sufficient — at $0.005 a
-  // call an agent could still spend $5/min within the ceiling.
-  const spentToday = sumSpendSinceUtcMidnight();
-  const capUnits = usdcStringToBaseUnits(dailyCapUsdc());
-  const spentTodayUnits = usdcStringToBaseUnits(spentToday.toFixed(USDC_DECIMALS));
-  if (spentTodayUnits + priceUsdUnits > capUnits) {
-    throw paymentBlocked(
-      `Daily cap reached: $${spentToday.toFixed(4)} spent + $${priceUsdcStr} would exceed $${dailyCapUsdc()}.`,
-      `Raise with: SHUMI_DAILY_USDC_CAP=5.00 <your command>, or wait until UTC midnight.`
-    );
-  }
-
-  if (!hasWallet()) {
-    throw paymentBlocked(
-      'No wallet configured.',
-      'Run `shumi wallet create`, or set SHUMI_X402_PRIVATE_KEY in your environment.'
-    );
-  }
-
-  const balanceFormatted = onChain?.formatted ?? '?';
-  const balanceRaw = onChain?.raw ?? 0n;
-
-  if (balanceRaw > 0n && balanceRaw < priceUnits) {
-    throw paymentBlocked(
-      `Insufficient ${symbol} on ${chainLabel}. You have ${balanceFormatted}; need ${priceStr}.`,
-      // Name the chain: the funding advice for Base is not the advice for
-      // another chain, and "send funds" without saying where is not advice.
-      `Send ${symbol} on ${chainLabel} to ${walletAddress}` +
-        (chainForNetwork(selected.network)?.chainId === 8453 ? ', or run `shumi wallet fund` for an onramp link.' : '.')
-    );
-  }
-
-  // Decide whether to prompt or just go.
-  if (!isAutoPay() && !isAgentMode()) {
-    const answer = await promptYesNo(formatChallengePrompt({
-      priceStr,
-      symbol,
-      // A blank label in a payment prompt says nothing about what is being
-      // bought. Name the gap instead of rendering an empty backtick pair.
-      route: commandLabelFor(resourceUrl) || 'this request (server sent no resource)',
-      chainLabel,
-      balanceFormatted,
-      walletAddress,
-      payToAddress: selected.payTo,
-    }), { defaultYes: true });
-    // null means Ctrl-C. Telling someone who aborted that they "Declined"
-    // claims a decision they never made, and it is the difference between a
-    // choice (exit 1) and an interrupt (exit 130).
-    if (answer === null) {
-      throw paymentAborted();
-    }
-    if (!answer) {
+    if (!Array.isArray(accepts) || accepts.length === 0) {
       throw paymentBlocked(
-        'Payment declined — nothing was charged.',
-        `Run with --auto-pay to skip this prompt, or subscribe at https://shumi.ai/pricing for unlimited queries.`
+        'Server returned 402 without payment requirements.',
+        'This is a server-side bug. Run with --raw to see the response and report it.'
       );
     }
-  }
 
-  // Unlock + sign.
-  const passphrase = await resolvePassphrase();
-  const privateKey = loadPrivateKey({ passphrase });
-  const paymentClient = createPaymentClient(privateKey);
-
-  let paymentHeader;
-  try {
-    // Hand the client a challenge containing only the row we chose, so the
-    // signature is unambiguously for that chain and its EIP-712 domain. The
-    // version comes from the challenge: our server still speaks v1 for the Base
-    // row, and signing a v1 row as v2 produces a payload the server cannot match.
-    const payload = await paymentClient.createPaymentPayload({
-      x402Version: Number(challengeBody?.x402Version) || X402_VERSION,
-      ...(challengeBody?.resource && { resource: challengeBody.resource }),
-      accepts: [selected],
-    });
-    paymentHeader = encodePaymentSignatureHeader(payload);
-  } catch (err) {
-    throw paymentBlocked(
-      `Signing failed: ${err.message}`,
-      `Check your wallet holds ${symbol} on ${chainLabel}.`
-    );
-  }
-
-  const retryInit = {
-    ...announced,
-    headers: { ...(announced.headers || {}), 'X-PAYMENT': paymentHeader },
-  };
-  const retryResponse = await fetch(input, retryInit);
-
-  if (retryResponse.status === 402) {
-    // Server rejected our payment. Read the body for a reason.
-    let reason = '';
-    try {
-      const b = await retryResponse.clone().json();
-      reason = b?.error || '';
-    } catch {}
-    throw paymentBlocked(
-      `Payment was rejected by server${reason ? `: ${reason}` : '.'}`,
-      'Try `shumi wallet balance` to verify funds.'
-    );
-  }
-
-  // Append receipt on success. Failures are silent (best-effort).
-  if (retryResponse.ok) {
-    // v2 emits `PAYMENT-RESPONSE`; v1 emitted `X-PAYMENT-RESPONSE`. Reading only
-    // the v1 spelling left `tx` null on every v2 settlement — and because the
-    // daily-cap accumulator skips receipts without a tx, the cap silently
-    // stopped accruing, which a server could trigger just by being on v2.
-    const respHeader = retryResponse.headers.get('payment-response')
-      || retryResponse.headers.get('x-payment-response');
-    let tx = null;
-    let payer = null;
-    if (respHeader) {
-      try {
-        const decoded = decodePaymentResponseHeader(respHeader);
-        tx = decoded?.transaction || null;
-        payer = decoded?.payer || null;
-      } catch {}
+    const challengeVersion = Number(challengeBody?.x402Version) || X402_VERSION;
+    const { usable, skipped } = usableRequirements(accepts, challengeVersion);
+    if (!usable.length) {
+      throw paymentBlocked(
+        `No payment option this client can use${skipped.length ? ` (offered: ${skipped.join(', ')})` : '.'}`,
+        'Upgrade with `npm i -g shumi@latest`, or subscribe at https://shumi.ai/pricing.'
+      );
     }
-    appendPaymentReceipt({
-      route: resourceUrl,
-      amountUsdc: priceUsdcStr,
-      tx,
-      payer,
-      wallet: walletAddress,
-    });
-    // Surface payment metadata so agent-mode callers can merge it into their
-    // JSON envelope (api-client.js does this). Silent in agent mode otherwise
-    // would mean a paying agent has no programmatic visibility into spend.
-    lastPaymentMeta = {
-      amountUsdc: priceUsdcStr,
-      asset: symbol,
-      route: resourceUrl,
-      network: selected.network,
-      chain: chainLabel,
-      tx,
-      payer,
-      wallet: walletAddress,
-      payTo: selected.payTo,
-    };
-    safeCapture('payment_completed', {
+    const selected = selectRequirement(usable);
+    // v2 lifts the resource out of the row and onto the challenge body, so read it
+    // from whichever place this version put it. It is what the prompt names as the
+    // thing being bought, so an empty label here is a prompt that says nothing.
+    const resourceUrl = selected.resource
+      || (typeof challengeBody?.resource === 'string' ? challengeBody.resource : challengeBody?.resource?.url)
+      || '';
+
+    // Decimals and dollar value come from the vetted asset table, not from the
+    // chain and never from the server. usableRequirements has already refused any
+    // asset that is not in it, so this cannot be null here.
+    const chain = chainForNetwork(selected.network);
+    const chainLabel = chain?.label ?? selected.network;
+    const asset = knownAsset(chain, selected.asset);
+    const { decimals, symbol } = asset;
+
+    const walletAddress = readKeystoreAddress();
+
+    // The balance read is for DISPLAY only. Letting an RPC hiccup change the
+    // decimals used for pricing is how a prompt ends up naming the wrong token or
+    // showing 0.0005 for a $5.00 charge.
+    let onChain = null;
+    try {
+      onChain = await balanceOnChain(selected.network, selected.asset, walletAddress);
+    } catch {
+      // Non-fatal: we still know the price exactly, we just cannot show a balance.
+    }
+
+    let priceUnits;
+    try {
+      priceUnits = BigInt(amountOf(selected));
+    } catch {
+      throw paymentBlocked(
+        `Server quoted an amount this client cannot read: ${String(amountOf(selected))}`,
+        'This is a server-side bug. Run with --raw to see the response and report it.'
+      );
+    }
+    if (priceUnits <= 0n) {
+      throw paymentBlocked('Server quoted a non-positive price.', 'Run with --raw and report it.');
+    }
+    const priceStr = baseUnitsToAmountString(priceUnits, decimals);
+    // Ceiling and daily cap are DOLLAR limits. Convert through the asset's known
+    // dollar value rather than assuming one token is one dollar.
+    const priceUsdcStr = baseUnitsToAmountString(priceUnits * BigInt(asset.usdPerUnit), decimals);
+    const priceUsdUnits = usdcStringToBaseUnits(priceUsdcStr);
+    safeCapture('payment_required', {
       amount_usdc: priceUsdcStr,
       network: selected.network,
       route: resourceUrl,
-      tx_hash: truncHash(tx),
-      wallet_truncated: truncAddress(walletAddress),
+      auto_pay: isAutoPay(),
     });
-    if (!isAgentMode()) {
-      // Stop the spinner first. Writing over a live spinner produced
-      //   ⠋ generating response💸 Paid 0.05 USDC on Base · tx 0x82f49af1…
-      // — the receipt glued to the spinner frame. Same defect as the payment
-      // prompt had, same fix; this write site was missed when that was done.
-      pauseActiveSpinner();
-      const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
-      process.stderr.write(`💸 Paid ${priceStr} ${symbol} on ${chainLabel}${txDisplay}\n`);
+    const ceilingUnits = usdcStringToBaseUnits(maxPriceCeilingUsdc());
+    if (priceUsdUnits > ceilingUnits) {
+      throw paymentBlocked(
+        `Price $${priceUsdcStr} exceeds your max ceiling $${maxPriceCeilingUsdc()}.`,
+        `Override with: SHUMI_MAX_PRICE_USDC=${priceUsdcStr} <your command>`
+      );
     }
-  }
 
-  return retryResponse;
+    // Daily cap: spent-today + this-call must stay under SHUMI_DAILY_USDC_CAP.
+    // Protects against an autonomous agent looping calls and burning the wallet.
+    // The per-call ceiling above is necessary but not sufficient — at $0.005 a
+    // call an agent could still spend $5/min within the ceiling.
+    const spentToday = sumSpendSinceUtcMidnight();
+    const capUnits = usdcStringToBaseUnits(dailyCapUsdc());
+    const spentTodayUnits = usdcStringToBaseUnits(spentToday.toFixed(USDC_DECIMALS));
+    if (spentTodayUnits + priceUsdUnits > capUnits) {
+      throw paymentBlocked(
+        `Daily cap reached: $${spentToday.toFixed(4)} spent + $${priceUsdcStr} would exceed $${dailyCapUsdc()}.`,
+        `Raise with: SHUMI_DAILY_USDC_CAP=5.00 <your command>, or wait until UTC midnight.`
+      );
+    }
+
+    if (!hasWallet()) {
+      throw paymentBlocked(
+        'No wallet configured.',
+        'Run `shumi wallet create`, or set SHUMI_X402_PRIVATE_KEY in your environment.'
+      );
+    }
+
+    const balanceFormatted = onChain?.formatted ?? '?';
+    const balanceRaw = onChain?.raw ?? 0n;
+
+    if (balanceRaw > 0n && balanceRaw < priceUnits) {
+      throw paymentBlocked(
+        `Insufficient ${symbol} on ${chainLabel}. You have ${balanceFormatted}; need ${priceStr}.`,
+        // Name the chain: the funding advice for Base is not the advice for
+        // another chain, and "send funds" without saying where is not advice.
+        `Send ${symbol} on ${chainLabel} to ${walletAddress}` +
+          (chainForNetwork(selected.network)?.chainId === 8453 ? ', or run `shumi wallet fund` for an onramp link.' : '.')
+      );
+    }
+
+    // Decide whether to prompt or just go.
+    if (!isAutoPay() && !isAgentMode()) {
+      const answer = await promptYesNo(formatChallengePrompt({
+        priceStr,
+        symbol,
+        // A blank label in a payment prompt says nothing about what is being
+        // bought. Name the gap instead of rendering an empty backtick pair.
+        route: commandLabelFor(resourceUrl) || 'this request (server sent no resource)',
+        chainLabel,
+        balanceFormatted,
+        walletAddress,
+        payToAddress: selected.payTo,
+      }), { defaultYes: true });
+      // null means Ctrl-C. Telling someone who aborted that they "Declined"
+      // claims a decision they never made, and it is the difference between a
+      // choice (exit 1) and an interrupt (exit 130).
+      if (answer === null) {
+        throw paymentAborted();
+      }
+      if (!answer) {
+        throw paymentBlocked(
+          'Payment declined — nothing was charged.',
+          `Run with --auto-pay to skip this prompt, or subscribe at https://shumi.ai/pricing for unlimited queries.`
+        );
+      }
+    }
+
+    // Unlock + sign.
+    const passphrase = await resolvePassphrase();
+    const privateKey = loadPrivateKey({ passphrase });
+    const paymentClient = createPaymentClient(privateKey);
+
+    let paymentHeader;
+    try {
+      // Hand the client a challenge containing only the row we chose, so the
+      // signature is unambiguously for that chain and its EIP-712 domain. The
+      // version comes from the challenge: our server still speaks v1 for the Base
+      // row, and signing a v1 row as v2 produces a payload the server cannot match.
+      const payload = await paymentClient.createPaymentPayload({
+        x402Version: Number(challengeBody?.x402Version) || X402_VERSION,
+        ...(challengeBody?.resource && { resource: challengeBody.resource }),
+        accepts: [selected],
+      });
+      paymentHeader = encodePaymentSignatureHeader(payload);
+    } catch (err) {
+      throw paymentBlocked(
+        `Signing failed: ${err.message}`,
+        `Check your wallet holds ${symbol} on ${chainLabel}.`
+      );
+    }
+
+    const retryInit = {
+      ...announced,
+      headers: { ...(announced.headers || {}), 'X-PAYMENT': paymentHeader },
+    };
+    const retryResponse = await fetch(input, retryInit);
+
+    if (retryResponse.status === 402) {
+      // Server rejected our payment. Read the body for a reason.
+      let reason = '';
+      try {
+        const b = await retryResponse.clone().json();
+        reason = b?.error || '';
+      } catch {}
+      throw paymentBlocked(
+        `Payment was rejected by server${reason ? `: ${reason}` : '.'}`,
+        'Try `shumi wallet balance` to verify funds.'
+      );
+    }
+
+    // Append receipt on success. Failures are silent (best-effort).
+    if (retryResponse.ok) {
+      // v2 emits `PAYMENT-RESPONSE`; v1 emitted `X-PAYMENT-RESPONSE`. Reading only
+      // the v1 spelling left `tx` null on every v2 settlement — and because the
+      // daily-cap accumulator skips receipts without a tx, the cap silently
+      // stopped accruing, which a server could trigger just by being on v2.
+      const respHeader = retryResponse.headers.get('payment-response')
+        || retryResponse.headers.get('x-payment-response');
+      let tx = null;
+      let payer = null;
+      if (respHeader) {
+        try {
+          const decoded = decodePaymentResponseHeader(respHeader);
+          tx = decoded?.transaction || null;
+          payer = decoded?.payer || null;
+        } catch {}
+      }
+      appendPaymentReceipt({
+        route: resourceUrl,
+        amountUsdc: priceUsdcStr,
+        tx,
+        payer,
+        wallet: walletAddress,
+      });
+      // Surface payment metadata so agent-mode callers can merge it into their
+      // JSON envelope (api-client.js does this). Silent in agent mode otherwise
+      // would mean a paying agent has no programmatic visibility into spend.
+      lastPaymentMeta = {
+        amountUsdc: priceUsdcStr,
+        asset: symbol,
+        route: resourceUrl,
+        network: selected.network,
+        chain: chainLabel,
+        tx,
+        payer,
+        wallet: walletAddress,
+        payTo: selected.payTo,
+      };
+      safeCapture('payment_completed', {
+        amount_usdc: priceUsdcStr,
+        network: selected.network,
+        route: resourceUrl,
+        tx_hash: truncHash(tx),
+        wallet_truncated: truncAddress(walletAddress),
+      });
+      if (!isAgentMode()) {
+        // Stop the spinner first. Writing over a live spinner produced
+        //   ⠋ generating response💸 Paid 0.05 USDC on Base · tx 0x82f49af1…
+        // — the receipt glued to the spinner frame. Same defect as the payment
+        // prompt had, same fix; this write site was missed when that was done.
+        pauseActiveSpinner();
+        const txDisplay = tx ? ` · tx ${tx.slice(0, 10)}…` : '';
+        process.stderr.write(`💸 Paid ${priceStr} ${symbol} on ${chainLabel}${txDisplay}\n`);
+      }
+    }
+
+    return retryResponse;
+  } catch (err) {
+    throw withGateContext(err, gate);
+  }
 }
 
 // Exported for tests
 export const __testing = {
+  describeGate,
+  resetPhrase,
   usdcStringToBaseUnits,
   baseUnitsToUsdcString,
   baseUnitsToAmountString,

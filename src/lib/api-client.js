@@ -156,7 +156,16 @@ export async function apiGet(path, query = {}) {
     // print the hint cleanly and exit with code 3 (rate-limited family).
     if (err?.category === 'PAYMENT_BLOCKED') {
       captureApiRequest(route, 402, Date.now() - startedAt);
-      throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
+      throw new ApiError(402, {
+        error: {
+          code: err.code,
+          message: err.message,
+          hint: err.hint,
+          // The quota facts the server put on the 402. A machine caller should
+          // not have to parse them back out of the prose message.
+          ...(err.gate ? { details: err.gate } : {}),
+        },
+      });
     }
     captureApiRequest(route, 0, Date.now() - startedAt);
     throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
@@ -212,7 +221,16 @@ export async function query({ messages, raw = false, archetype = 'base', command
   } catch (err) {
     if (err?.category === 'PAYMENT_BLOCKED') {
       captureApiRequest(route, 402, Date.now() - startedAt);
-      throw new ApiError(402, { error: { code: err.code, message: err.message, hint: err.hint } });
+      throw new ApiError(402, {
+        error: {
+          code: err.code,
+          message: err.message,
+          hint: err.hint,
+          // The quota facts the server put on the 402. A machine caller should
+          // not have to parse them back out of the prose message.
+          ...(err.gate ? { details: err.gate } : {}),
+        },
+      });
     }
     captureApiRequest(route, 0, Date.now() - startedAt);
     throw err;
