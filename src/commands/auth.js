@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { renderOk } from '../lib/output.js';
 import ora from 'ora';
 import { login, logout, parseCallbackUrl, acceptCallbackCredential } from '../lib/auth.js';
 import { getToken, getWalletAddress } from '../lib/config.js';
@@ -91,17 +92,28 @@ export function registerAuthCommands(program) {
   program
     .command('whoami')
     .description('show current authentication status')
-    .action(() => {
+    .action((_options, cmd) => {
+      const opts = cmd.optsWithGlobals();
       const token = getToken();
       const wallet = getWalletAddress();
+      const authenticated = Boolean(token);
 
-      if (!token) {
-        console.log(chalk.yellow('Not authenticated. Run: shumi login'));
-        return;
-      }
-
-      console.log(`Wallet: ${wallet}`);
-      console.log(`Status: ${chalk.green('authenticated')}`);
+      // The manifest advertises `{ wallet, status }` for this command, so a
+      // machine caller is entitled to that object. It used to print prose
+      // regardless of --json/--agent, which made the manifest wrong rather
+      // than merely unhelpful.
+      renderOk(
+        { schemaVersion: 1, data: { wallet: authenticated ? wallet : null, status: authenticated ? 'authenticated' : 'unauthenticated' } },
+        opts,
+        (d) => {
+          if (d.status !== 'authenticated') {
+            process.stdout.write(chalk.yellow('Not authenticated. Run: shumi login\n'));
+            return;
+          }
+          process.stdout.write(`Wallet: ${d.wallet}\n`);
+          process.stdout.write(`Status: ${chalk.green('authenticated')}\n`);
+        },
+      );
     });
 }
 
