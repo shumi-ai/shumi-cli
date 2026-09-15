@@ -1,7 +1,14 @@
 import { createServer } from 'http';
 import { nanoid } from 'nanoid';
 import open from 'open';
-import { saveCredentials, clearCredentials } from './config.js';
+import {
+  saveCredentials,
+  clearCredentials,
+  savePendingLoginState,
+  getPendingLoginState,
+  clearPendingLoginState,
+} from './config.js';
+import { inspectToken } from './token.js';
 
 const AUTH_URL = 'https://shumi.ai/auth/cli';
 
@@ -16,6 +23,12 @@ const AUTH_URL = 'https://shumi.ai/auth/cli';
  */
 export async function login({ onUrl } = {}) {
   const state = nanoid();
+  // Persist the CSRF state before the browser is opened. If this process dies
+  // while the user is still signing (closed lid, timeout, Ctrl-C), the state
+  // is the only thing that lets `shumi login --paste` accept the resulting
+  // callback *and still verify it*. Without it, recovery would mean dropping
+  // the CSRF check, which turns a UX fix into a login-CSRF hole.
+  savePendingLoginState(state);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -64,6 +77,7 @@ export async function login({ onUrl } = {}) {
       }
 
       saveCredentials({ token, walletAddress: wallet, expiresAt: expiresAt || null });
+      clearPendingLoginState();
 
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(`
@@ -94,8 +108,24 @@ export async function login({ onUrl } = {}) {
       });
     });
 
-    // Timeout after 2 minutes. This must stay >= the browser page's own 25s
-    // watchdog so the browser can show its specific error first.
+    // Must stay >= the browser page's own 25s watchdog so the browser shows its
+    // specific error first. Beyond that the budget is set by how long a HUMAN
+    // takes, which we finally measured instead of guessing: a healthy sign-in
+    // on 0.7.5 — no ad blocker, no stall, no reload — took 260s end to end
+    // (2026-08-12, real wallet, prod). That is 87% of the previous 300s cap.
+    //
+    // Which means the old number was incoherent: it was chosen to accommodate
+    // the DEGRADED path (find the ad blocker, disable it for the site, reload,
+    // then sign) while the healthy path alone nearly exhausted it. The
+    // recovery it was sized for could not have fitted.
+    //
+    // 15 minutes. Not a guess at the degraded path's length — just enough room
+    // that a human is never racing us, which is the only thing this timeout
+    // should be measuring. Holding a localhost socket open costs nothing, and
+    // Ctrl-C cancels. It stays bounded rather than infinite so an abandoned
+    // login cannot leave a listener and a node process behind forever, and it
+    // stays inside the one-hour TTL on the pending-login state so `shumi login
+    // --paste` is always still valid when this fires.
     timeoutId = setTimeout(() => {
       if (!settled) {
         cleanup();
@@ -103,10 +133,64 @@ export async function login({ onUrl } = {}) {
         err.timedOut = true;
         reject(err);
       }
-    }, 120000);
+    }, 900000);
   });
+}
+
+/**
+ * Parse a stranded callback URL — the one the browser landed on after the
+ * local listener was already gone (ERR_CONNECTION_REFUSED). The token in that
+ * URL is valid and already issued; before this existed the only recovery was
+ * to redo the whole sign-in, often into the same wall.
+ *
+ * Pure: validates and returns the credential, writes nothing. The caller
+ * confirms with the user before saving.
+ *
+ * Security: the `state` is checked against the value the login command
+ * persisted, so a callback URL crafted by someone else cannot log this CLI
+ * into an account the user did not sign in to. The URL is only parsed, never
+ * fetched.
+ */
+export function parseCallbackUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(String(rawUrl).trim());
+  } catch {
+    throw new Error('That is not a URL. Copy the full address from the browser, starting with http://');
+  }
+
+  const token = url.searchParams.get('token');
+  const wallet = url.searchParams.get('wallet');
+  const callbackState = url.searchParams.get('state');
+  const expiresAt = url.searchParams.get('expiresAt');
+
+  if (!token || !wallet) {
+    throw new Error('That URL has no token in it. Make sure you copied the address the sign-in redirected to.');
+  }
+
+  const pending = getPendingLoginState();
+  if (!pending) {
+    throw new Error('No sign-in is pending (or it started over an hour ago). Run: shumi login');
+  }
+  if (callbackState !== pending) {
+    throw new Error('State mismatch — this URL is not from the sign-in you started. Run: shumi login');
+  }
+
+  const info = inspectToken(token);
+  if (info.expired) {
+    throw new Error(`That token already expired (${info.expiresAt}). Run: shumi login`);
+  }
+
+  return { token, walletAddress: wallet, expiresAt: expiresAt || info.expiresAt || null, email: info.email };
+}
+
+/** Commit a credential returned by parseCallbackUrl(), after the user confirms. */
+export function acceptCallbackCredential({ token, walletAddress, expiresAt }) {
+  saveCredentials({ token, walletAddress, expiresAt: expiresAt || null });
+  clearPendingLoginState();
 }
 
 export function logout() {
   clearCredentials();
+  clearPendingLoginState();
 }

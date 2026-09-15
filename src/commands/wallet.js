@@ -113,10 +113,21 @@ export function registerWalletCommand(program) {
     .command('receipts')
     .description('show recent x402 payment receipts (last 20)')
     .option('--limit <n>', 'how many receipts to show', '20')
+    .option('--since <date>', 'only receipts after this date (YYYY-MM-DD)')
+    .option('--until <date>', 'only receipts before this date (YYYY-MM-DD)')
+    .option('--export <format>', 'export as csv (stdout only, no envelope)')
     .action(async function (cmdOpts) {
       const opts = this.optsWithGlobals();
       try {
+        if (cmdOpts.export && cmdOpts.export !== 'csv') {
+          renderErr({ message: `Unsupported export format: ${cmdOpts.export}`, hint: 'Only `--export csv` is supported.' }, opts);
+          return;
+        }
         const limit = parseInt(cmdOpts.limit, 10) || 20;
+        // An export defaults to the full (filtered) log — a silent 20-row cap
+        // would truncate exactly the "export this month" case the flag exists
+        // for. An explicit --limit still applies.
+        const limitExplicit = this.getOptionValueSource('limit') !== 'default';
         const logPath = join(homedir(), '.shumi', 'payments.log');
         if (!existsSync(logPath)) {
           renderOk({ data: { receipts: [], note: 'No payment receipts yet.' } }, opts, () => {
@@ -124,11 +135,33 @@ export function registerWalletCommand(program) {
           });
           return;
         }
-        const lines = readFileSync(logPath, 'utf8')
-          .split('\n').filter(Boolean).slice(-limit);
-        const receipts = lines.map((l) => {
-          try { return JSON.parse(l); } catch { return { raw: l }; }
-        });
+        let receipts = readFileSync(logPath, 'utf8')
+          .split('\n').filter(Boolean)
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter(Boolean);
+
+        if (cmdOpts.since) {
+          const since = cmdOpts.since;
+          receipts = receipts.filter((r) => r.ts && r.ts >= since);
+        }
+        if (cmdOpts.until) {
+          // Compare date prefixes: `ts <= until + 'T23:59:59'` loses receipts
+          // in the final second of the day (toISOString carries milliseconds).
+          receipts = receipts.filter((r) => r.ts && r.ts.slice(0, 10) <= cmdOpts.until);
+        }
+        if (cmdOpts.export !== 'csv' || limitExplicit) {
+          receipts = receipts.slice(-limit);
+        }
+
+        if (cmdOpts.export === 'csv') {
+          const header = 'timestamp,amountUsdc,route,tx,payer,wallet';
+          const rows = receipts.map((r) =>
+            [r.ts, r.amountUsdc, r.route, r.tx, r.payer, r.wallet].map(csvEscape).join(',')
+          );
+          process.stdout.write(header + '\n' + rows.join('\n') + '\n');
+          return;
+        }
+
         const totalUsdc = receipts.reduce((sum, r) => sum + (parseFloat(r.amountUsdc) || 0), 0);
         renderOk({
           data: {
@@ -257,4 +290,13 @@ export function registerWalletCommand(program) {
         renderErr(err, opts);
       }
     });
+}
+
+function csvEscape(val) {
+  if (val === null || val === undefined) return '';
+  const s = String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
 }

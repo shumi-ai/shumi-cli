@@ -1,14 +1,19 @@
 import chalk from 'chalk';
+import { renderOk } from '../lib/output.js';
 import ora from 'ora';
-import { login, logout } from '../lib/auth.js';
+import { login, logout, parseCallbackUrl, acceptCallbackCredential } from '../lib/auth.js';
 import { getToken, getWalletAddress } from '../lib/config.js';
+import { promptHidden, promptYesNo } from '../lib/prompt.js';
 import { capture, truncWallet, identifyWallet } from '../lib/telemetry.js';
 
 export function registerAuthCommands(program) {
   program
     .command('login')
     .description('authenticate with shumi via browser')
-    .action(async () => {
+    .option('--paste', 'finish a sign-in whose browser callback failed (paste the URL when prompted)')
+    .action(async (cmdOpts) => {
+      if (cmdOpts?.paste) return recoverFromPastedCallback();
+
       const existingToken = getToken();
       if (existingToken) {
         const wallet = getWalletAddress();
@@ -51,9 +56,21 @@ export function registerAuthCommands(program) {
           } catch { /* ignore */ }
           spinner.fail('Authentication timed out.');
           console.log('');
-          console.log("Sign-in happens in the browser tab. If it didn't complete, common causes are:");
-          console.log(`  ${chalk.dim('•')} a privacy/ad blocker or VPN blocking app.dynamic.xyz`);
-          console.log(`  ${chalk.dim('•')} the wallet connection wasn't finished`);
+          // Lead with recovery, not diagnosis. If the user DID complete the
+          // signature and the browser then showed connection-refused, the
+          // token exists and is sitting in that dead tab's address bar —
+          // re-running the whole flow throws away a working credential.
+          console.log(`If you finished signing and the browser showed a connection error, your token was created.`);
+          console.log(`Copy that page's URL and run ${chalk.cyan('shumi login --paste')}.`);
+          console.log('');
+          // The browser tab diagnoses the stall itself and names the cause on
+          // screen, so point there first. This list stays a guess for the case
+          // where the tab was closed before it could say anything.
+          console.log('Otherwise, sign-in happens in the browser tab, and that tab shows what went wrong.');
+          console.log('If you closed it, the usual causes are:');
+          console.log(`  ${chalk.dim('•')} an ad blocker, privacy extension, or VPN blocking sign-in`);
+          console.log(`  ${chalk.dim('•')} a private or incognito window, which blocks the storage sign-in needs`);
+          console.log(`  ${chalk.dim('•')} the wallet connection was never finished`);
           console.log(`  ${chalk.dim('•')} the connected wallet doesn't hold SHUMI`);
           console.log('');
           console.log(`Re-run ${chalk.cyan('shumi login')} and connect the wallet that holds your SHUMI.`);
@@ -75,18 +92,81 @@ export function registerAuthCommands(program) {
   program
     .command('whoami')
     .description('show current authentication status')
-    .action(() => {
+    .action((_options, cmd) => {
+      const opts = cmd.optsWithGlobals();
       const token = getToken();
       const wallet = getWalletAddress();
+      const authenticated = Boolean(token);
 
-      if (!token) {
-        console.log(chalk.yellow('Not authenticated. Run: shumi login'));
-        return;
-      }
-
-      console.log(`Wallet: ${wallet}`);
-      console.log(`Status: ${chalk.green('authenticated')}`);
+      // The manifest advertises `{ wallet, status }` for this command, so a
+      // machine caller is entitled to that object. It used to print prose
+      // regardless of --json/--agent, which made the manifest wrong rather
+      // than merely unhelpful.
+      renderOk(
+        { schemaVersion: 1, data: { wallet: authenticated ? wallet : null, status: authenticated ? 'authenticated' : 'unauthenticated' } },
+        opts,
+        (d) => {
+          if (d.status !== 'authenticated') {
+            process.stdout.write(chalk.yellow('Not authenticated. Run: shumi login\n'));
+            return;
+          }
+          process.stdout.write(`Wallet: ${d.wallet}\n`);
+          process.stdout.write(`Status: ${chalk.green('authenticated')}\n`);
+        },
+      );
     });
+}
+
+/**
+ * Recover a sign-in whose callback never reached the CLI.
+ *
+ * The URL is read from a hidden stdin prompt, not a flag: it carries a live
+ * credential, and anything on argv lands in shell history and is readable by
+ * any other local user via `ps`. Hidden input also keeps it out of the
+ * terminal scrollback the user may later screen-share.
+ */
+async function recoverFromPastedCallback() {
+  if (getToken()) {
+    console.log(chalk.yellow(`Already authenticated as ${truncate(getWalletAddress())}`));
+    console.log('Run "shumi logout" first to re-authenticate.');
+    return;
+  }
+
+  console.log('Paste the URL the browser ended up on (the page that failed to load).');
+  console.log(chalk.dim('Input is hidden. Press Enter when done, Ctrl-C to cancel.'));
+  const pasted = await promptHidden('URL: ');
+  if (!pasted) {
+    console.log('Cancelled.');
+    process.exitCode = 1;
+    return;
+  }
+
+  let credential;
+  try {
+    credential = parseCallbackUrl(pasted);
+  } catch (err) {
+    console.log(chalk.red(`✗ ${err.message}`));
+    process.exitCode = 1;
+    return;
+  }
+
+  // Name the account before committing. A pasted URL is user-supplied input;
+  // the state check proves it belongs to the sign-in they started, and this
+  // shows them which wallet that turned out to be.
+  const who = credential.email ? `${credential.email} (${truncate(credential.walletAddress)})` : truncate(credential.walletAddress);
+  const confirmed = await promptYesNo(`Sign in as ${who}? (Y/n) `, { defaultYes: true });
+  if (!confirmed) {
+    console.log('Cancelled — nothing saved.');
+    process.exitCode = 1;
+    return;
+  }
+
+  acceptCallbackCredential(credential);
+  console.log(chalk.green(`✓ Authenticated as ${truncate(credential.walletAddress)}`));
+  try {
+    identifyWallet(credential.walletAddress);
+    capture('auth_success', { wallet_truncated: truncWallet(credential.walletAddress), method: 'paste' });
+  } catch { /* telemetry must never affect auth */ }
 }
 
 function truncate(address) {

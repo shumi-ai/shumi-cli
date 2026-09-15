@@ -2,21 +2,23 @@
 
 import { createRequire } from 'module';
 import { program } from 'commander';
-import updateNotifier from 'update-notifier';
+import { initUpdateCheck } from '../src/lib/updateCheck.js';
+import { authExpiryNotice, describeExpiry } from '../src/lib/authNotice.js';
 import { registerCommands } from '../src/index.js';
 import { initTelemetry, captureError, flush, shutdown } from '../src/lib/telemetry.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-// Update notifier — stderr only, suppressed in non-TTY / agent mode / env opt-out
-// so it never corrupts piped JSON output.
-const isTty = Boolean(process.stdout.isTTY);
+// Update check. Run it for EVERYONE (env opt-out aside), not just on a TTY.
+// The old `isTty &&` guard here meant agent-driven users never even performed
+// the background check, so they sat on a known-broken version indefinitely —
+// see src/lib/updateCheck.js. The result now reaches machines through the JSON
+// envelope and `shumi doctor`; notify() below is only the human surface, and
+// the library self-gates it on stdout.isTTY, so piped output stays clean.
 const isAgent = process.argv.includes('--agent') || process.env.SHUMI_AGENT === '1';
-const optOut = process.env.SHUMI_NO_UPDATE_NOTIFIER === '1';
-if (isTty && !isAgent && !optOut) {
-  updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 }).notify({ defer: true });
-}
+const notifier = initUpdateCheck(pkg);
+if (notifier && !isAgent) notifier.notify({ defer: true });
 
 // Telemetry (PostHog) — safe no-op if disabled / no key. Must be initialized
 // before any command runs so capture() at the chokepoints has a live client.
@@ -63,9 +65,29 @@ program
 
 registerCommands(program);
 
+/**
+ * Human-facing pre-expiry warning, printed once per invocation on stderr so it
+ * cannot corrupt piped stdout. Machines get the same fact as
+ * `meta.authExpiring` in the JSON envelope instead — this is only the TTY half.
+ *
+ * Placed here rather than in each command: one warning per process, on every
+ * command, is the whole point. A session that ends with no warning reads as an
+ * outage, not as "log in again".
+ */
+function warnIfSessionExpiring() {
+  try {
+    if (!process.stdout.isTTY || isAgent) return;
+    const notice = authExpiryNotice();
+    if (notice) {
+      process.stderr.write(`\nshumi: your session ${describeExpiry(notice)} (${notice.expiresAt.slice(0, 10)}). Run: ${notice.action}\n`);
+    }
+  } catch { /* a warning must never be able to fail a command */ }
+}
+
 program
   .parseAsync()
   .then(async () => {
+    warnIfSessionExpiring();
     // Normal completion: flush queued telemetry (bounded so it never hangs).
     await shutdown();
     // Force-exit: the PostHog client can leave a pending socket open that keeps

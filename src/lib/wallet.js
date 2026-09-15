@@ -28,7 +28,10 @@ import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'crypt
 import { privateKeyToAccount } from 'viem/accounts';
 import { createWalletClient, createPublicClient, http, formatUnits } from 'viem';
 import { base } from 'viem/chains';
-import { createSigner } from 'x402-fetch';
+import { x402Client } from '@x402/core/client';
+import { ExactEvmScheme } from '@x402/evm';
+import { ExactEvmSchemeV1 } from '@x402/evm/v1';
+import { chainForNetwork, rpcUrlFor, getTokenBalance, getTokenMeta } from './x402-chains.js';
 
 const CONFIG_DIR = join(homedir(), '.shumi');
 const KEYSTORE_PATH = join(CONFIG_DIR, 'wallet.json');
@@ -220,12 +223,34 @@ export function buildWalletClient(privateKey) {
 }
 
 /**
- * Create the signer that x402-fetch expects. Wraps viem + USDC-on-Base setup.
+ * Build the x402 payment client for a private key.
+ *
+ * Two registrations, because our server speaks both dialects at once and a
+ * client that handles only one silently cannot pay on the other:
+ *
+ *   - `eip155:*` (v2) — CAIP-2 rows, any EVM chain. This is what makes paying
+ *     on a chain nobody hard-coded possible at all.
+ *   - `base` (v1)     — the legacy row our own API still emits as `network:
+ *     "base"`, kept because v1 clients in the wild only understand that
+ *     spelling and we are not going to break them to tidy this up.
+ *
+ * Replaces `createSigner('base', …)` from `x402-fetch@1.2.0`, whose network
+ * argument was validated against a closed 17-entry enum — it could not express
+ * `eip155:4663` at all, and the whole v1 line has been frozen since April 2026.
+ */
+export function createPaymentClient(privateKey) {
+  const account = privateKeyToAccount(privateKey);
+  return new x402Client()
+    .register('eip155:*', new ExactEvmScheme(account))
+    .registerV1('base', new ExactEvmSchemeV1(account));
+}
+
+/**
+ * Kept for callers that only need an address-bearing signer. The payment path
+ * uses createPaymentClient above.
  */
 export async function createX402Signer(privateKey) {
-  // x402-fetch's createSigner takes a network string + the raw private key
-  // and returns a viem-compatible signer pre-configured for that network.
-  return createSigner('base', privateKey);
+  return privateKeyToAccount(privateKey);
 }
 
 const publicClient = createPublicClient({
@@ -236,6 +261,10 @@ const publicClient = createPublicClient({
 /**
  * Read USDC balance for an address on Base. Returns the human-readable string
  * (e.g. "4.83") and the raw BigInt for downstream comparisons.
+ *
+ * Base-specific by design — `shumi wallet balance` reports the funding wallet,
+ * and Base is where funding happens. Payments on other chains read their
+ * balance through balanceOnChain below.
  */
 export async function getUsdcBalance(address) {
   const raw = await publicClient.readContract({
@@ -247,6 +276,31 @@ export async function getUsdcBalance(address) {
   return {
     formatted: formatUnits(raw, USDC_DECIMALS),
     raw,
+  };
+}
+
+/**
+ * Balance + token metadata for whichever chain a challenge asked us to pay on.
+ *
+ * Decimals are read from the token rather than assumed: the 402 gives an amount
+ * in base units and never says how many decimals they are. Assuming 6 renders a
+ * wrong number in the one prompt where a wrong number costs money.
+ *
+ * Returns null when the challenge names a chain this CLI has no RPC for —
+ * the caller must decline rather than pay somewhere it cannot see.
+ */
+export async function balanceOnChain(network, asset, address) {
+  const chain = chainForNetwork(network);
+  if (!chain) return null;
+  const meta = await getTokenMeta(chain, asset);
+  const raw = await getTokenBalance(chain, asset, address);
+  return {
+    chain,
+    symbol: meta.symbol,
+    decimals: meta.decimals,
+    raw,
+    formatted: formatUnits(raw, meta.decimals),
+    rpcUrl: rpcUrlFor(chain),
   };
 }
 

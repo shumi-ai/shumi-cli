@@ -9,7 +9,7 @@ manager is **yarn** (`yarn.lock` committed; `yarn install --frozen-lockfile`).
 Publishing is automated via **GitHub Actions OIDC "Trusted Publishing"** — there
 is **no `NPM_TOKEN` secret** and you should **never run `npm publish` locally**
 (it won't be authenticated and would bypass the pipeline). A trusted publisher is
-registered on npmjs.com for the `shumi` package (repo `mayrsascha/shumi-cli`,
+registered on npmjs.com for the `shumi` package (repo `shumi-ai/shumi-cli`,
 workflow `publish.yml`).
 
 To cut a release:
@@ -20,8 +20,20 @@ To cut a release:
 #    and push the tag:
 git commit -am "chore(release): shumi-cli 0.4.3"
 git tag v0.4.3
-git push --follow-tags
+git push origin main
+git push origin v0.4.3          # push the tag explicitly, see below
 ```
+
+**Push the tag by name, not with `--follow-tags`.** `--follow-tags` carries only
+*annotated* tags, and `git tag v0.4.3` creates a lightweight one, so the commit
+goes up, the tag silently stays local, and nothing publishes. Git reports success
+either way. Verify before you walk away:
+
+```bash
+git ls-remote --tags origin | grep v0.4.3   # no output = nothing will publish
+```
+
+This bit 0.7.4, which was released following these steps as written.
 
 Pushing a `v*.*.*` tag triggers `.github/workflows/publish.yml`, which:
 1. installs deps with yarn, runs the test suite,
@@ -32,10 +44,12 @@ Pushing a `v*.*.*` tag triggers `.github/workflows/publish.yml`, which:
 Watch the run: `gh run watch <id> --exit-status` (or the Actions tab). Confirm
 with `npm view shumi version`. If the run fails at the publish step, check that
 the npm Trusted Publisher (npmjs.com → `shumi` package → Settings) still points
-at repo `mayrsascha/shumi-cli` + workflow `publish.yml`.
+at repo `shumi-ai/shumi-cli` + workflow `publish.yml`.
 
 Notes:
 - Do **not** add or restore an `NPM_TOKEN` — OIDC replaces it. The old token was
   revoked.
 - `npm version patch|minor|major` also works to do the bump+commit+tag in one
-  step; just ensure the tag is pushed (`git push --follow-tags`).
+  step, and it annotates the tag, so `git push --follow-tags` does carry it.
+  That is the one path where `--follow-tags` is safe. Confirm with
+  `git ls-remote --tags origin` regardless.

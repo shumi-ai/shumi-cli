@@ -45,3 +45,21 @@ describe('exitCodeForErrCode', () => {
     expect(exitCodeForErrCode(code)).toBe(expected);
   });
 });
+
+describe('payment exit codes', () => {
+  // Exit 3 is documented as "rate-limited / billing block" and the README calls the
+  // table pinned for agent callers. A declined payment IS a billing block, so it
+  // stays on 3 even though its code string changed from RATE_LIMITED (no limit was
+  // hit) to PAYMENT_REQUIRED. Moving it to 1 would have made a declined payment
+  // indistinguishable from a bad flag.
+  it('keeps a payment block on the documented billing-block code', () => {
+    expect(exitCodeForErrCode('PAYMENT_REQUIRED')).toBe(Exit.RATE_LIMITED);
+  });
+
+  // Ctrl-C at the payment prompt used to report "Declined." and exit 3, claiming a
+  // decision the user never made. An interrupt is 130 by shell convention.
+  it('reports an aborted payment as an interrupt, not a decision', () => {
+    expect(exitCodeForErrCode('PAYMENT_ABORTED')).toBe(Exit.SIGINT);
+    expect(exitCodeForErrCode('PAYMENT_ABORTED')).not.toBe(exitCodeForErrCode('PAYMENT_REQUIRED'));
+  });
+});

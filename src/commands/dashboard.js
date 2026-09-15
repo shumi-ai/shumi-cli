@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { apiGet } from '../lib/api-client.js';
+import { apiGet, ApiError } from '../lib/api-client.js';
 import { renderOk, renderErr, spinner, resolveMode } from '../lib/output.js';
 import { withSchema } from '../lib/schema.js';
 import { getToken } from '../lib/config.js';
@@ -43,6 +43,26 @@ export function registerDashboardAction(program) {
     // Bare ticker shortcut: `shumi BTC` → quick signal, no subcommand needed.
     // (Subcommand names take precedence, so `shumi signal`, `shumi help`, etc.
     // still dispatch normally.)
+    //
+    // Extra operands mean this was never a ticker. `shumi marekt health` — a
+    // typo of `market` — used to bind "marekt" to [symbol], silently discard
+    // "health", and go on to render a signal for a coin named MAREKT. Every
+    // mistyped subcommand became a plausible-looking reading of a nonexistent
+    // coin, so refuse the guess rather than answer the wrong question.
+    const operands = cmd.args || [];
+    if (operands.length > 1) {
+      renderErr(
+        new ApiError(400, {
+          error: {
+            code: 'BAD_REQUEST',
+            message: `Unknown command: ${operands.join(' ')}. Run \`shumi --help\` for the command list.`,
+          },
+        }),
+        opts,
+      );
+      return;
+    }
+
     if (symbol) {
       await runSignal(symbol.toUpperCase(), opts);
       return;

@@ -2,6 +2,9 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { Exit, exitCodeForStatus, exitCodeForErrCode } from './exitCodes.js';
 import { captureError } from './telemetry.js';
+import { getUpdateInfo } from './updateCheck.js';
+import { authExpiryNotice, describeExpiry } from './authNotice.js';
+import { applyContextGuard } from './spill.js';
 
 /**
  * Decide whether an error is a real fault worth capturing (5xx, network,
@@ -43,12 +46,43 @@ export function resolveMode(opts = {}) {
   return { json, agent, isTty };
 }
 
+// The x402 payment prompt happens deep inside apiGet while a spinner started out
+// here is still animating. ora repaints the current line, so it overwrote the
+// "Pay? [Y/n]" question: the user saw a payment notice with no question and no
+// sign that anything was waiting on them. Tracking the live instance lets the
+// prompt pause it — see pauseActiveSpinner.
+let activeSpinner = null;
+
 export function spinner(text, opts = {}) {
   const mode = resolveMode(opts);
   if (mode.agent || mode.json) {
     return { start() { return this; }, stop() {}, succeed() {}, fail() {}, set text(_) {} };
   }
-  return ora({ text, spinner: 'dots' }).start();
+  const instance = ora({ text, spinner: 'dots' }).start();
+  activeSpinner = instance;
+  for (const method of ['stop', 'succeed', 'fail']) {
+    const original = instance[method].bind(instance);
+    instance[method] = (...args) => {
+      if (activeSpinner === instance) activeSpinner = null;
+      return original(...args);
+    };
+  }
+  return instance;
+}
+
+/**
+ * Stop the running spinner, if any, and return a function that restarts it.
+ * A no-op when nothing is spinning, so callers need no branching.
+ *
+ * Use around anything that reads from the terminal: otherwise the prompt and the
+ * spinner fight over the same line, and the prompt loses.
+ */
+export function pauseActiveSpinner() {
+  const instance = activeSpinner;
+  if (!instance) return () => {};
+  const { text } = instance;
+  instance.stop();
+  return () => { instance.start(text); activeSpinner = instance; };
 }
 
 /**
@@ -58,10 +92,22 @@ export function spinner(text, opts = {}) {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    // Apply --fields/--top centrally so every renderOk-based command honors the
-    // globally-advertised filters (previously only typed commands did). No-ops
-    // when the flags are absent or the envelope has no .data payload.
-    process.stdout.write(JSON.stringify(applyClientFilters(envelope, opts)) + '\n');
+    // Two independent passes, in this order:
+    //
+    // 1. --fields/--top applied centrally, so every renderOk-based command
+    //    honors the globally-advertised filters (previously only typed
+    //    commands did). No-ops when the flags are absent.
+    // 2. Context guard, here rather than in typedCmd because 20 of the 36
+    //    commands — signal, regime, coin, ask, search, dashboard, watch —
+    //    never go through typedCmd, and those include the largest payloads.
+    //    One choke point covers all of them. See lib/spill.js.
+    //
+    // Filter first: the guard decides whether to spill based on payload size,
+    // and a --top 5 request should be measured at 5 rows, not at the full
+    // response it was sliced from. Reversing these makes the guard spill
+    // payloads the user already narrowed.
+    const filtered = applyClientFilters(envelope, opts);
+    process.stdout.write(JSON.stringify(applyContextGuard(withNotices(filtered), { mode })) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);
@@ -105,6 +151,30 @@ function pick(obj, keep) {
 }
 
 /**
+ * Attach out-of-band notices to a JSON envelope: a newer version is available,
+ * or the session is about to expire.
+ *
+ * This is the only channel that reaches a machine consumer: `notify()` prints
+ * nothing when stdout is piped, and `resolveMode()` forces JSON for exactly
+ * those runs. Both are nested under `meta` so they can never collide with a
+ * command's `data` payload. No-op when there is nothing to say.
+ */
+function withNotices(env) {
+  if (!env || typeof env !== 'object') return env;
+  const update = getUpdateInfo();
+  const expiring = authExpiryNotice();
+  if (!update && !expiring) return env;
+  return {
+    ...env,
+    meta: {
+      ...(env.meta || {}),
+      ...(update && { updateAvailable: update }),
+      ...(expiring && { authExpiring: expiring }),
+    },
+  };
+}
+
+/**
  * Emit a machine error on stderr (always JSON envelope), set exit code, and return.
  * Caller decides whether to also print a friendly human line.
  */
@@ -116,16 +186,36 @@ export function renderErr(err, opts = {}) {
       captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
     } catch { /* telemetry must never affect error rendering */ }
   }
+  // One rendering, not two. Both were emitted before, so an interactive user read
+  // the same failure twice — once as raw JSON, once as prose:
+  //
+  //   {"schemaVersion":1,"error":{"code":"PAYMENT_REQUIRED","message":"Payment declined…"}}
+  //   ✗ Payment declined — nothing was charged.
+  //
+  // The envelope is a machine contract (README: errors always emit a stable JSON
+  // envelope on stderr so `stdout | jq` never breaks). It stays exactly as it was
+  // for --json, --agent and any non-TTY, which is every consumer that parses it.
+  // A human at a terminal is not that consumer.
   if (mode.json || mode.agent) {
-    // Machine mode only: emit the structured envelope on stderr for parsing.
-    process.stderr.write(JSON.stringify(envelope) + '\n');
+    // The error path matters more than the success path here: a client stuck on a
+    // version whose bug makes every command fail would otherwise never see the
+    // notice, because renderOk never runs for it.
+    process.stderr.write(JSON.stringify(withNotices(envelope)) + '\n');
   } else {
-    // Human mode: a raw JSON blob before the friendly line poisons every error
-    // — and the quota/auth errors ARE the paywall moment. Show only the two
-    // actionable lines; machines get the envelope via --json/--agent above.
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
+    // The actionable next step. Quota and auth failures ARE the paywall moment,
+    // and a human who just hit one needs the way out, not the error code again.
+    // Suppressed in machine modes above, where the envelope carries the details.
     const hint = hintForError(envelope);
     if (hint) process.stderr.write(chalk.yellow(`→ ${hint}\n`));
+    // withNotices carried this, and dropping the envelope would have dropped it
+    // silently. update-notifier prints its own banner for TTYs, so only the auth
+    // warning needs a prose form — otherwise it would reach humans through
+    // `shumi doctor` alone.
+    const expiring = authExpiryNotice();
+    if (expiring) {
+      process.stderr.write(chalk.yellow(`  ⚠ session ${describeExpiry(expiring)} — run: ${expiring.action}\n`));
+    }
   }
   process.exitCode = exitCodeFromError(err);
 }
