@@ -50,7 +50,9 @@ beforeAll(async () => {
           type: 'event',
           stream: 'funding',
           schemaVersion: 1,
-          data: { market: { temperature: 'warm', avgApr: 0.01 + i * 0.001, positive: 10 + i, negative: 5, total: 50 } },
+          // avgApr in PERCENT units to match the real funding/momentum endpoint
+          // (e.g. -9.9 = -9.9% APR), not a 0..1 fraction.
+          data: { market: { temperature: 'warm', avgApr: -9.9 + i * 0.1, positive: 10 + i, negative: 5, total: 50 } },
           meta: { ts: new Date().toISOString(), route: 'watch/funding', tick: i, data_age_seconds: i * 5 },
         });
       }

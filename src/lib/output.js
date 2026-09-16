@@ -92,15 +92,62 @@ export function pauseActiveSpinner() {
 export function renderOk(envelope, opts = {}, human) {
   const mode = resolveMode(opts);
   if (mode.json) {
-    // Context guard sits here rather than in typedCmd because 20 of the 36
-    // commands — signal, regime, coin, ask, search, dashboard, watch — never go
-    // through typedCmd, and those include the largest payloads. One choke point
-    // covers all of them. See lib/spill.js for when it engages.
-    process.stdout.write(JSON.stringify(applyContextGuard(withNotices(envelope), { mode })) + '\n');
+    // Two independent passes, in this order:
+    //
+    // 1. --fields/--top applied centrally, so every renderOk-based command
+    //    honors the globally-advertised filters (previously only typed
+    //    commands did). No-ops when the flags are absent.
+    // 2. Context guard, here rather than in typedCmd because 20 of the 36
+    //    commands — signal, regime, coin, ask, search, dashboard, watch —
+    //    never go through typedCmd, and those include the largest payloads.
+    //    One choke point covers all of them. See lib/spill.js.
+    //
+    // Filter first: the guard decides whether to spill based on payload size,
+    // and a --top 5 request should be measured at 5 rows, not at the full
+    // response it was sliced from. Reversing these makes the guard spill
+    // payloads the user already narrowed.
+    const filtered = applyClientFilters(envelope, opts);
+    process.stdout.write(JSON.stringify(applyContextGuard(withNotices(filtered), { mode })) + '\n');
     return;
   }
   if (typeof human === 'function') human(envelope?.data ?? envelope, chalk);
   else process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
+}
+
+/**
+ * Project --fields (whitelist top-level data keys) and --top (slice the first
+ * array) onto an envelope's `data`. Pure and idempotent — safe to apply more
+ * than once (typed commands pre-filter for human mode; renderOk re-applies for
+ * JSON). Returns the envelope unchanged when no filter flags are set.
+ */
+export function applyClientFilters(env, opts = {}) {
+  if (!env?.data || (!opts.top && !opts.fields)) return env;
+  let d = env.data;
+
+  if (opts.top && Array.isArray(d)) {
+    d = d.slice(0, opts.top);
+  } else if (opts.top && d && typeof d === 'object') {
+    for (const k of Object.keys(d)) {
+      if (Array.isArray(d[k])) { d = { ...d, [k]: d[k].slice(0, opts.top) }; break; }
+    }
+  }
+
+  if (opts.fields) {
+    const keep = new Set(opts.fields.split(',').map((s) => s.trim()).filter(Boolean));
+    if (Array.isArray(d)) {
+      d = d.map((row) => (row && typeof row === 'object' ? pick(row, keep) : row));
+    } else if (d && typeof d === 'object') {
+      d = pick(d, keep);
+    }
+  }
+
+  return { ...env, data: d };
+}
+
+function pick(obj, keep) {
+  const out = {};
+  for (const k of keep) if (k in obj) out[k] = obj[k];
+  return out;
 }
 
 /**
@@ -156,6 +203,11 @@ export function renderErr(err, opts = {}) {
     process.stderr.write(JSON.stringify(withNotices(envelope)) + '\n');
   } else {
     process.stderr.write(chalk.red(`✗ ${envelope.error.message}\n`));
+    // The actionable next step. Quota and auth failures ARE the paywall moment,
+    // and a human who just hit one needs the way out, not the error code again.
+    // Suppressed in machine modes above, where the envelope carries the details.
+    const hint = hintForError(envelope);
+    if (hint) process.stderr.write(chalk.yellow(`→ ${hint}\n`));
     // withNotices carried this, and dropping the envelope would have dropped it
     // silently. update-notifier prints its own banner for TTYs, so only the auth
     // warning needs a prose form — otherwise it would reach humans through
@@ -166,6 +218,50 @@ export function renderErr(err, opts = {}) {
     }
   }
   process.exitCode = exitCodeFromError(err);
+}
+
+/**
+ * Map an error envelope to a single actionable next-step line shown to humans
+ * (suppressed in --json / --agent modes — machines parse the envelope instead).
+ * Returns null when the message is already self-explanatory, so we never echo
+ * a redundant second line. URLs are limited to the verified product home; no
+ * pricing/upgrade deep-links are invented here.
+ */
+export function hintForError(envelope) {
+  const code = envelope?.error?.code;
+  const msg = envelope?.error?.message || '';
+  const d = envelope?.error?.details || {};
+  switch (code) {
+    case 'RATE_LIMITED': {
+      // Enriched gate payload (server >= gate-payload PR): quota.wall + reset_at
+      // + upgrade_url. Falls back cleanly to the flat used/limit shape older
+      // servers send. No em-dashes (published-copy rule).
+      const q = d.quota || {};
+      const url = d.upgrade_url || 'https://shumi.ai';
+      if (d.tier === 'free') {
+        const cap = d.limit ?? q.limit;
+        const usedLine =
+          q.wall === 'grant' ? (cap ? `You have used all ${cap} free queries.` : 'You have used all your free queries.')
+          : q.wall === 'drip' ? "That is today's free query used."
+          : (d.limit != null ? `Free tier limit reached (${d.used}/${d.limit}).` : 'Free tier limit reached.');
+        const resetLine = d.reset_at ? ` Your next free query unlocks ${untilReset(d.reset_at)}.` : '';
+        return `${usedLine}${resetLine} Unlock more at ${url}`;
+      }
+      return `Rate limit hit. Wait a moment and retry, or review your plan at ${url}`;
+    }
+    case 'AUTH_REQUIRED':
+    case 'AUTH_INVALID':
+      // The server message usually already says "Run: shumi login" — don't double up.
+      return /shumi login/i.test(msg) ? null : 'Run: shumi login  (or set SHUMI_TOKEN=shumi_sk_… for headless use)';
+    case 'BAD_REQUEST':
+      return 'Check your flags and arguments — run the command with --help.';
+    case 'UPSTREAM_5XX':
+      return 'Upstream server error. Retry shortly; run `shumi doctor` if it persists.';
+    case 'NETWORK':
+      return 'Network or timeout problem. Check your connection, then run `shumi doctor`.';
+    default:
+      return null;
+  }
 }
 
 function errEnvelopeFromError(err) {
@@ -191,6 +287,17 @@ function exitCodeFromError(err) {
   if (err?.body?.error?.code) return exitCodeForErrCode(err.body.error.code);
   if (typeof err?.status === 'number') return exitCodeForStatus(err.status);
   return Exit.INTERNAL;
+}
+
+// Human-friendly time until a reset_at ISO timestamp ("in ~7h", "tomorrow").
+function untilReset(iso) {
+  const ms = Date.parse(iso) - Date.now();
+  if (!(ms > 0)) return 'soon';
+  const h = Math.round(ms / 3_600_000);
+  if (h < 1) return 'within the hour';
+  if (h < 24) return `in ~${h}h`;
+  if (h < 48) return 'tomorrow';
+  return `in ~${Math.round(h / 24)}d`;
 }
 
 function codeForStatus(s) {

@@ -8,7 +8,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 vi.mock('../../src/lib/api-client.js', () => ({ apiGet: vi.fn() }));
-vi.mock('../../src/lib/output.js', () => ({
+// Partial mock: the renderers are stubbed so nothing prints, but the real
+// applyClientFilters is kept. It moved out of typedCmd.js into output.js so
+// renderOk can apply the same filters to the 20 commands that never reach
+// typedCmd; stubbing it here would make these assertions test nothing.
+vi.mock('../../src/lib/output.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   renderOk: vi.fn(),
   renderErr: vi.fn(),
   spinner: vi.fn(() => ({ stop: vi.fn() })),

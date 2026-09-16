@@ -273,8 +273,19 @@ function formatNumber(n, key) {
 
   // Fraction-valued rates → percent units. Must precede the generic percent
   // branch below, which assumes the value already is a percentage.
+  //
+  // Rendered WITHOUT directional color. formatPctMaybeColored is calibrated for
+  // funding, where above +5% is expensive and therefore red. A win rate is not
+  // funding-signed: on that scale every win rate above 5% prints red, so a 90%
+  // win rate — the best number on the screen — renders as the alarm color.
   if (has('rate') && t.some((w) => FRACTION_RATE_QUALIFIERS.has(w))) {
-    return formatPctMaybeColored(fractionToPct(n));
+    return formatPctPlain(fractionToPct(n));
+  }
+
+  // `accuracy` is the same class of number but carries no `rate` token, so the
+  // qualifier check above cannot reach it.
+  if (has('accuracy')) {
+    return formatPctPlain(fractionToPct(n));
   }
 
   // Percent-like fields, already in percent units (funding.apr=1.7 means 1.7%).
@@ -344,11 +355,23 @@ function formatString(s, key) {
   return s;
 }
 
-function formatPrice(n) {
+// Exported: `market` renders its own table rather than going through
+// smartFormat, and must use the same price and age rules as every other command.
+export function formatPrice(n) {
   if (n >= 1000)  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   if (n >= 1)     return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (n >= 0.01)  return '$' + n.toFixed(4);
   return '$' + n.toPrecision(4);
+}
+
+/**
+ * Percent units, same precision rules as formatPctMaybeColored, no color.
+ * For percentages whose sign carries no direction — win rate, hit rate,
+ * accuracy — where the funding color scale would invert the meaning.
+ */
+function formatPctPlain(n) {
+  const mag = Math.abs(n);
+  return (mag !== 0 && mag < 0.01 ? Number(n.toPrecision(2)).toString() : n.toFixed(2)) + '%';
 }
 
 function formatPctMaybeColored(n) {
@@ -373,7 +396,7 @@ function formatBigNumber(n) {
   return n.toString();
 }
 
-function formatRelative(s) {
+export function formatRelative(s) {
   if (s < 60) return `${Math.round(s)}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;

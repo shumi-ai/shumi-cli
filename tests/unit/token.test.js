@@ -93,4 +93,16 @@ describe('inspectToken — expiry against the injected clock', () => {
     expect(r.expired).toBe(false);
     expect(r.exp).toBeNull();
   });
+
+  it('makes NO network call (pure/offline)', () => {
+    // The reason doctor and init can run without spending query quota. If
+    // inspectToken ever reached for fetch, this throws.
+    const orig = globalThis.fetch;
+    globalThis.fetch = () => { throw new Error('inspectToken must not hit the network'); };
+    try {
+      expect(inspectToken(makeJwt({ exp: NOW_S + 60 }), NOW_MS).valid).toBe(true);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
 });
