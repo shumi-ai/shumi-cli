@@ -73,7 +73,7 @@ shumi ask "why is HYPE pumping?"
 
 | Command | Description |
 |---|---|
-| `shumi coin <symbol>` | Coin analysis (trend, bands, sentiment) |
+| `shumi coin <symbol>` | Coin analysis (trend, sentiment) |
 | `shumi market` | Market health overview |
 | `shumi sentiment [--coin X\|--category Y\|--narrative Z]` | Sentiment analysis |
 | `shumi trends [--fresh\|--stale\|--aligned]` | Trend scanner |
