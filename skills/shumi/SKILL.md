@@ -37,7 +37,7 @@ This opens a browser for wallet authentication. Check status with `shumi health`
 ### Coin Analysis
 
 ```bash
-shumi coin BTC                    # Full analysis: trend, streak, bands, sentiment
+shumi coin BTC                    # Full analysis: trend, streak, sentiment
 shumi coin ETH --interval 1w     # Weekly interval
 shumi coin SOL --history          # With 24h historical comparison
 shumi coin BTC --raw              # Raw JSON (structured data for programmatic use)

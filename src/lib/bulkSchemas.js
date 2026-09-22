@@ -14,10 +14,10 @@ const SCHEMAS = {
   // Coin
   'coin.sentiment':    { kind: 'object', fields: { symbol: 'string', success: 'boolean', data: 'object — sentiment summary fields' } },
   'coin.historical':   { kind: 'object', fields: { marketCap: 'number|null', volume: 'number|null', openInterest: 'number', fundingRate: 'number', futuresVolume24h: 'number', priceUSD: 'number' } },
-  'coin.by-id':        { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap, ... }', trends: 'array', latestBands: 'object', average_streak: 'number' } },
-  'coin.by-name':      { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }', trends: 'array', latestBands: 'object', average_streak: 'number' } },
+  'coin.by-id':        { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap, ... }', trends: 'array', average_streak: 'number' } },
+  'coin.by-name':      { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }', trends: 'array', average_streak: 'number' } },
   'coin.by-contract':  { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }' }, note: 'requires --chain' },
-  'coin.lookup':       { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap }', trends: 'array', latestBands: 'object' } },
+  'coin.lookup':       { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap }', trends: 'array' } },
 
   // Market
   'market.prices':     { kind: 'object', fields: { prices: 'object — keyed by coin id, each {coinId, price, source, ts}', ts: 'number — unix ms', baselines: 'object — optional, when --baselines' } },
