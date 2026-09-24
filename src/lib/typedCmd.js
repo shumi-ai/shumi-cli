@@ -1,5 +1,6 @@
 import { apiGet } from './api-client.js';
-import { renderOk, renderErr, spinner, applyClientFilters } from './output.js';
+import chalk from 'chalk';
+import { renderOk, renderErr, spinner, applyClientFilters, resolveMode } from './output.js';
 import { smartFormat } from './smartFormat.js';
 import { capture, captureError } from './telemetry.js';
 import { getToken } from './config.js';
@@ -76,6 +77,9 @@ export function typedAction({ route, query, spinner: spinnerText, human, fetch }
     try {
       const env = fetch ? await fetch(r, q, opts) : await apiGet(r, q);
       s.stop();
+      // A command's note for a human (JSON consumers read it from meta.note). Written only
+      // now, after the spinner has stopped, so ora cannot repaint over it.
+      if (env?.meta?.note && !resolveMode(opts).json) process.stderr.write(chalk.dim(`  ${env.meta.note}\n`));
       const filtered = applyClientFilters(env, opts);
       renderOk(filtered, opts, human ? (data, chalk) => human(data, chalk, opts) : (data, chalk) => smartFormat(data, chalk, opts));
       try {

@@ -1,8 +1,6 @@
 import { Option } from 'commander';
-import chalk from 'chalk';
 import { apiGet } from '../lib/api-client.js';
-import { resolveMode } from '../lib/output.js';
-import { resolveScan } from '../lib/scanResolve.js';
+import { canonicalCategory, canonicalExchange, rowsOf } from '../lib/scanResolve.js';
 import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
 /** Sort keys /api/coins/filter accepts. change24h / change7d answer "what's pumping". */
@@ -28,15 +26,48 @@ export function scanQuery(opts) {
   };
 }
 
+export const EMPTY_SCAN_NOTE =
+  'No coins matched. Category names are exact and case-sensitive (e.g. Meme, Layer-2); `shumi category list` shows them. Exchanges need the full venue name (e.g. "Coinbase Exchange").';
+
 /**
- * Scan with category/exchange name resolution (see lib/scanResolve.js). A resolved name is
- * reported: in env.meta.resolved for machines, and as a dim line on stderr at a terminal.
+ * One scan, one backend call. Known misspellings of big categories and short venue names
+ * are rewritten locally first (static maps in lib/scanResolve.js, no network). A comma-joined
+ * category is refused, since it is matched as one name and can only return nothing. An empty
+ * result with a category or exchange set comes back as the empty result plus `meta.note`
+ * (typedAction prints it on stderr at a terminal, after the spinner stops), never an error.
+ *
+ * Should the backend wrap rows as `{ rows: [...], ...summary }`, the rows become `data` and the
+ * summary moves to `meta.coverage`, so --fields and --top apply to the rows.
  */
 export async function scanFetch(route, query, opts = {}, get = apiGet) {
-  const { env, notes } = await resolveScan(query, get);
+  const q = { ...query };
+  if (q.categories && /[,;|]/.test(q.categories)) {
+    const err = new Error(`One category per scan: "${q.categories}" is matched as a single name and matches nothing.`);
+    err.status = 400;
+    err.body = { error: { code: 'BAD_REQUEST', message: err.message } };
+    throw err;
+  }
+  const notes = [];
+  if (q.categories) {
+    const c = canonicalCategory(q.categories);
+    if (c !== q.categories) notes.push(`category "${q.categories}" sent as "${c}".`);
+    q.categories = c;
+  }
+  if (q.exchanges) {
+    const e = canonicalExchange(q.exchanges);
+    if (e !== q.exchanges) notes.push(`exchange "${q.exchanges}" sent as "${e}".`);
+    q.exchanges = e;
+  }
+
+  let env = await get(route, q);
+  const data = env?.data;
+  if (data && !Array.isArray(data) && Array.isArray(data.rows)) {
+    const { rows, ...coverage } = data;
+    env = { ...env, data: rows, meta: { ...(env.meta || {}), coverage } };
+  }
+  if ((q.categories || q.exchanges) && rowsOf(env?.data).length === 0) notes.push(EMPTY_SCAN_NOTE);
   if (!notes.length) return env;
-  if (!resolveMode(opts).json) process.stderr.write(chalk.dim(`  (${notes.join('; ')})\n`));
-  return { ...env, meta: { ...(env?.meta || {}), resolved: notes } };
+  return { ...env, meta: { ...(env?.meta || {}), note: notes.join(' ') } };
 }
 
 /**
