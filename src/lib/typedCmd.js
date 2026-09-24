@@ -37,13 +37,14 @@ function commandNames(cmd) {
  *     query: (ctx, opts) => ({ action: 'state' }),
  *     spinner: 'futures state…',
  *     human: (data, chalk, opts) => ...,   // optional — falls back to smartFormat
+ *     fetch: (route, query, opts) => env, // optional — replaces the single apiGet
  *   }))
  *
  * Universal flags (added to the parent command via addUniversalFlags):
  *   --fields <list>  — comma-separated keys to keep (top-level)
  *   --top <n>        — keep first N items if data is an array
  */
-export function typedAction({ route, query, spinner: spinnerText, human }) {
+export function typedAction({ route, query, spinner: spinnerText, human, fetch }) {
   return async function (...args) {
     const cmd = args[args.length - 1];
     const opts = cmd.optsWithGlobals();
@@ -73,7 +74,7 @@ export function typedAction({ route, query, spinner: spinnerText, human }) {
 
     const s = spinner(sp, opts);
     try {
-      const env = await apiGet(r, q);
+      const env = fetch ? await fetch(r, q, opts) : await apiGet(r, q);
       s.stop();
       const filtered = applyClientFilters(env, opts);
       renderOk(filtered, opts, human ? (data, chalk) => human(data, chalk, opts) : (data, chalk) => smartFormat(data, chalk, opts));

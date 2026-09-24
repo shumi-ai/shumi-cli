@@ -1,4 +1,8 @@
 import { Option } from 'commander';
+import chalk from 'chalk';
+import { apiGet } from '../lib/api-client.js';
+import { resolveMode } from '../lib/output.js';
+import { resolveScan } from '../lib/scanResolve.js';
 import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
 /** Sort keys /api/coins/filter accepts. change24h / change7d answer "what's pumping". */
@@ -25,6 +29,17 @@ export function scanQuery(opts) {
 }
 
 /**
+ * Scan with category/exchange name resolution (see lib/scanResolve.js). A resolved name is
+ * reported: in env.meta.resolved for machines, and as a dim line on stderr at a terminal.
+ */
+export async function scanFetch(route, query, opts = {}, get = apiGet) {
+  const { env, notes } = await resolveScan(query, get);
+  if (!notes.length) return env;
+  if (!resolveMode(opts).json) process.stderr.write(chalk.dim(`  (${notes.join('; ')})\n`));
+  return { ...env, meta: { ...(env?.meta || {}), resolved: notes } };
+}
+
+/**
  * Typed scan command.
  */
 export function registerScanCommand(program) {
@@ -32,10 +47,10 @@ export function registerScanCommand(program) {
     .command('scan')
     .description('filter coins by trend, category, market cap, exchange; sort by market cap or 24h change')
     .option('--trend <direction>', 'filter by trend (UP, HODL, DOWN)')
-    .option('--category <name>', 'filter by category')
+    .option('--category <name>', 'one category, exact name (e.g. Meme, Layer-2; see `shumi category list`)')
     .option('--mcap-min <n>', 'minimum market cap in USD')
     .option('--mcap-max <n>', 'maximum market cap in USD')
-    .option('--exchange <name>', 'filter by exchange')
+    .option('--exchange <name>', 'exchange by full venue name (e.g. Binance, "Coinbase Exchange")')
     .option('--interval <interval>', 'trend interval (1d, 1w)')
     .option('--limit <n>', 'max results')
     .addOption(new Option('--sort <field>', 'sort key (default marketCap); change24h / change7d = top movers').choices(SCAN_SORT_FIELDS))
@@ -44,6 +59,7 @@ export function registerScanCommand(program) {
     .action(typedAction({
       route: 'scan',
       query: (ctx, opts) => scanQuery(opts),
+      fetch: scanFetch,
       spinner: 'scanning…',
     }));
 }

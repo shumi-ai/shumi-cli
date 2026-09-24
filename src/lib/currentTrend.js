@@ -33,6 +33,9 @@ export function currentTrendLine(data, c, label = 'current trend') {
  */
 export function renderCoinLookup(data, c, opts) {
   const line = currentTrendLine(data, c);
-  if (line) process.stdout.write(line + '\n\n');
-  smartFormat(data, c, opts);
+  if (!line) return smartFormat(data, c, opts);
+  process.stdout.write(line + '\n\n');
+  // The line already says it; without this smartFormat repeats it as a CURRENTTREND section.
+  const { currentTrend, currentTrendWeekly, ...rest } = data;
+  smartFormat(rest, c, opts);
 }

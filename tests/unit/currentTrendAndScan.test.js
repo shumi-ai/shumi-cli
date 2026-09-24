@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Command } from 'commander';
 import { currentTrendLine, renderCoinLookup } from '../../src/lib/currentTrend.js';
-import { scanQuery, registerScanCommand, SCAN_SORT_FIELDS } from '../../src/commands/scan.js';
+import { scanQuery, scanFetch, registerScanCommand, SCAN_SORT_FIELDS } from '../../src/commands/scan.js';
 import { getSchema } from '../../src/lib/schema.js';
 import { applyBulkSchemas } from '../../src/lib/bulkSchemas.js';
 import { registerCoinCommand } from '../../src/commands/coin.js';
@@ -92,5 +92,94 @@ describe('bulk schemas', () => {
       const schema = getSchema(coin.commands.find((cmd) => cmd.name() === name));
       expect(schema.fields.currentTrend, name).toMatch(/CURRENT trend/);
     }
+  });
+});
+
+describe('renderCoinLookup does not repeat the trend', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('prints the trend line once, with no CURRENTTREND section after it', () => {
+    const out = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s) => { out.push(String(s)); return true; });
+    renderCoinLookup({ coin: { id: 'bitcoin' }, trends: [{ trend: 'HODL', start: '2026-09-19', end: '2026-09-23', streak: 5 }], currentTrend: CURRENT }, c, {});
+    const text = out.join('');
+    expect(text).toContain('current trend  HODL');
+    expect(text).not.toMatch(/CURRENTTREND/i);
+    expect(text).not.toContain('incompleteDayExcluded');
+  });
+});
+
+describe('scan name resolution', () => {
+  // Real names from the Coin table (2026-09-24).
+  const CATEGORIES = ['Meme', 'Layer-2', 'BTC Layer 2', 'GMCI Layer 2 Index'];
+  const COINS = [
+    { name: 'Dogecoin', categories: ['Meme'], exchanges: ['Binance', 'Coinbase Exchange'] },
+    { name: 'Arbitrum', categories: ['Layer-2'], exchanges: ['Binance'] },
+  ];
+  // Behaves like /api/coins/filter: exact case-sensitive category, case-insensitive exchange.
+  function fakeGet({ coins = COINS, wrap = false } = {}) {
+    const calls = [];
+    const get = async (route, q = {}) => {
+      calls.push({ route, q });
+      if (route === 'category/list') return { data: CATEGORIES };
+      const rows = coins
+        .filter((x) => !q.categories || x.categories.includes(q.categories))
+        .filter((x) => !q.exchanges || x.exchanges.some((e) => e.toLowerCase() === String(q.exchanges).toLowerCase()))
+        .map((x) => x.name);
+      return { schemaVersion: 1, data: wrap ? { rows } : rows };
+    };
+    return { get, calls };
+  }
+  const json = { json: true };
+
+  it('sends a correct category once, unchanged', async () => {
+    const { get, calls } = fakeGet();
+    const env = await scanFetch('scan', { categories: 'Meme' }, json, get);
+    expect(env.data).toEqual(['Dogecoin']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('resolves --category meme / "Layer 2" to the real name and re-runs', async () => {
+    for (const [asked, real, coin] of [['meme', 'Meme', 'Dogecoin'], ['Layer 2', 'Layer-2', 'Arbitrum']]) {
+      const { get, calls } = fakeGet();
+      const env = await scanFetch('scan', { categories: asked }, json, get);
+      expect(env.data).toEqual([coin]);
+      expect(calls.at(-1).q.categories).toBe(real);
+      expect(env.meta.resolved[0]).toContain(`matched as "${real}"`);
+    }
+  });
+
+  it('errors with the closest names for an unknown category instead of printing an empty list', async () => {
+    const { get } = fakeGet();
+    await expect(scanFetch('scan', { categories: 'Layer Two' }, json, get)).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringMatching(/No category named "Layer Two".*"Layer-2"/),
+    });
+  });
+
+  it('refuses comma-joined categories', async () => {
+    const { get, calls } = fakeGet();
+    await expect(scanFetch('scan', { categories: 'Meme,AI' }, json, get)).rejects.toThrow(/One category per scan/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps a genuinely empty result for a valid category', async () => {
+    const { get } = fakeGet({ coins: [] });
+    const env = await scanFetch('scan', { categories: 'Meme', trend: 'UP' }, json, get);
+    expect(env.data).toEqual([]);
+  });
+
+  it('maps "coinbase" to "Coinbase Exchange" and errors on an unknown venue', async () => {
+    const { get, calls } = fakeGet();
+    const env = await scanFetch('scan', { exchanges: 'coinbase' }, json, get);
+    expect(calls[0].q.exchanges).toBe('Coinbase Exchange');
+    expect(env.data).toEqual(['Dogecoin']);
+    await expect(scanFetch('scan', { exchanges: 'Krakenn' }, json, fakeGet().get)).rejects.toThrow(/Closest known: "Kraken"/);
+  });
+
+  it('treats { rows: [...] } as rows', async () => {
+    const { get, calls } = fakeGet({ wrap: true });
+    const env = await scanFetch('scan', { categories: 'Meme', sortBy: 'change24h' }, json, get);
+    expect(env.data.rows).toEqual(['Dogecoin']);
+    expect(calls).toHaveLength(1);
   });
 });
