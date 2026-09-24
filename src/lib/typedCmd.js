@@ -1,5 +1,6 @@
 import { apiGet } from './api-client.js';
-import { renderOk, renderErr, spinner, applyClientFilters } from './output.js';
+import chalk from 'chalk';
+import { renderOk, renderErr, spinner, applyClientFilters, resolveMode } from './output.js';
 import { smartFormat } from './smartFormat.js';
 import { capture, captureError } from './telemetry.js';
 import { getToken } from './config.js';
@@ -36,14 +37,15 @@ function commandNames(cmd) {
  *     route: 'futures',
  *     query: (ctx, opts) => ({ action: 'state' }),
  *     spinner: 'futures state…',
- *     human: (data, chalk) => ...,   // optional — falls back to smartFormat
+ *     human: (data, chalk, opts) => ...,   // optional — falls back to smartFormat
+ *     fetch: (route, query, opts) => env, // optional — replaces the single apiGet
  *   }))
  *
  * Universal flags (added to the parent command via addUniversalFlags):
  *   --fields <list>  — comma-separated keys to keep (top-level)
  *   --top <n>        — keep first N items if data is an array
  */
-export function typedAction({ route, query, spinner: spinnerText, human }) {
+export function typedAction({ route, query, spinner: spinnerText, human, fetch }) {
   return async function (...args) {
     const cmd = args[args.length - 1];
     const opts = cmd.optsWithGlobals();
@@ -73,10 +75,13 @@ export function typedAction({ route, query, spinner: spinnerText, human }) {
 
     const s = spinner(sp, opts);
     try {
-      const env = await apiGet(r, q);
+      const env = fetch ? await fetch(r, q, opts) : await apiGet(r, q);
       s.stop();
+      // A command's note for a human (JSON consumers read it from meta.note). Written only
+      // now, after the spinner has stopped, so ora cannot repaint over it.
+      if (env?.meta?.note && !resolveMode(opts).json) process.stderr.write(chalk.dim(`  ${env.meta.note}\n`));
       const filtered = applyClientFilters(env, opts);
-      renderOk(filtered, opts, human || ((data, chalk) => smartFormat(data, chalk, opts)));
+      renderOk(filtered, opts, human ? (data, chalk) => human(data, chalk, opts) : (data, chalk) => smartFormat(data, chalk, opts));
       try {
         capture('command_completed', {
           command,

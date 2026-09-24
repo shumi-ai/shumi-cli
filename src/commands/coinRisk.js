@@ -4,6 +4,7 @@ import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 import { withSchema } from '../lib/schema.js';
 import { smartFormat } from '../lib/smartFormat.js';
 import { formatPercentUnits } from './funding.js';
+import { renderCoinLookup } from '../lib/currentTrend.js';
 
 /**
  * Registers coin subcommands: risk, sentiment, historical, by-contract, by-id, by-name, lookup.
@@ -115,6 +116,7 @@ export function registerCoinRiskCommand(coinCmd) {
     .action(typedAction({
       route: (ctx) => `coin/by-id/${encodeURIComponent(ctx.args[0])}`,
       spinner: (ctx) => `lookup by id ${ctx.args[0]}…`,
+      human: renderCoinLookup,
     }));
 
   coinCmd
@@ -124,6 +126,7 @@ export function registerCoinRiskCommand(coinCmd) {
     .action(typedAction({
       route: (ctx) => `coin/by-name/${encodeURIComponent(ctx.args[0])}`,
       spinner: (ctx) => `lookup by name ${ctx.args[0]}…`,
+      human: renderCoinLookup,
     }));
 
   coinCmd
@@ -134,6 +137,7 @@ export function registerCoinRiskCommand(coinCmd) {
       route: 'coin/lookup',
       query: (ctx) => ({ symbol: ctx.args[0] }),
       spinner: (ctx) => `coin ${ctx.args[0]}…`,
+      human: renderCoinLookup,
     }));
 }
 
