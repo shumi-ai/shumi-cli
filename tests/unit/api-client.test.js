@@ -59,7 +59,9 @@ describe('apiGet', () => {
   });
 
   it('wraps network error as ApiError(0, NETWORK)', async () => {
-    fetchSpy.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    // The shape undici's fetch actually rejects with. A plain Error is no
+    // longer called NETWORK: see errorClassification.test.js.
+    fetchSpy.mockRejectedValue(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } }));
     await expect(apiGet('regime')).rejects.toMatchObject({
       status: 0,
       body: { error: { code: 'NETWORK' } },

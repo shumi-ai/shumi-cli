@@ -1,4 +1,4 @@
-import { spinner as makeSpinner } from './output.js';
+import { spinner as makeSpinner, renderErr } from './output.js';
 import { query } from './api-client.js';
 import { renderText, renderRaw } from './renderer.js';
 import { capture, captureError } from './telemetry.js';
@@ -15,8 +15,12 @@ const PHASES = [
 
 /**
  * Execute a Shumi query with animated spinner, error handling, and rendering.
+ *
+ * `opts` is the command's `optsWithGlobals()`, so --json / --agent reach
+ * resolveMode for the spinner and for the error output. Without them a caller
+ * passing --agent at a terminal would still get a spinner and prose errors.
  */
-export async function execute({ queryText, raw = false, archetype = 'base', commandContext = null }) {
+export async function execute({ queryText, raw = false, archetype = 'base', commandContext = null, opts = {} }) {
   const startTime = Date.now();
 
   // Telemetry: shared chokepoint for the NLP commands (coin/ask/signal/tweets/
@@ -47,7 +51,7 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
   // The phase timers below only assign `.text`; ora renders on an interval that
   // stop() clears, so a paused spinner stays quiet and picks up the newest text
   // when it resumes.
-  const spinner = makeSpinner(PHASES[0].text);
+  const spinner = makeSpinner(PHASES[0].text, opts);
 
   // Schedule phase transitions
   const timers = PHASES.slice(1).map(phase =>
@@ -77,7 +81,21 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
     } catch { /* ignore */ }
   } catch (error) {
     timers.forEach(clearTimeout);
-    spinner.fail(error.message);
+    // stop(), not fail(message): renderErr prints the one rendering of this
+    // error. The spinner used to be the ONLY output here, and spinner() is a
+    // no-op stub whenever output is JSON (stdout piped, --json, --agent), so
+    // every failure on those paths exited 1 with nothing on stdout or stderr.
+    // A 402 "Out of quota" was invisible to exactly the callers (agents,
+    // scripts, `| jq`) that most need the envelope and exit code 3.
+    //
+    // renderErr writes the JSON envelope to stderr in machine modes and prose
+    // plus a next-step hint at a terminal, sets the documented exit code, and
+    // reports real faults (5xx, network, internal) to error telemetry while
+    // skipping paywall and auth events.
+    spinner.stop();
+    // Tagged so the NLP dashboards (command + surface 'nlp') keep matching the
+    // faults renderErr reports: 5xx, network, internal.
+    renderErr(error, opts, { command, surface: 'nlp' });
     try {
       capture('command_failed', {
         command,
@@ -86,8 +104,15 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
         http_status: typeof error?.status === 'number' ? error.status : undefined,
         duration_ms: Date.now() - startTime,
       });
-      captureError(error, { command, surface: 'nlp' });
+      // renderErr treats other 4xx as user errors and skips them. On the NLP
+      // path a 400/404/413/422 from /api/cli means the CLI built a request the
+      // server rejected, which these dashboards have always counted.
+      if (isCapturedNlp4xx(error?.status)) captureError(error, { command, surface: 'nlp' });
     } catch { /* ignore */ }
-    process.exitCode = 1;
   }
+}
+
+function isCapturedNlp4xx(status) {
+  return typeof status === 'number' && status >= 400 && status < 500 &&
+    ![401, 402, 403, 429].includes(status);
 }

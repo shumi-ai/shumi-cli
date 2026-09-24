@@ -17,7 +17,7 @@ export function registerCoinCommand(program) {
         return;
       }
       const queryText = buildCoinQuery(symbol.toUpperCase(), options);
-      await execute({ queryText, raw: options.raw, commandContext: 'coin' });
+      await execute({ queryText, raw: options.raw, commandContext: 'coin', opts: cmd.optsWithGlobals() });
     });
 
   registerCoinRiskCommand(coin);

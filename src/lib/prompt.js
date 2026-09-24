@@ -33,6 +33,16 @@ function isTTY() {
 }
 
 /**
+ * Whether the prompts below can actually ask anything. When false,
+ * promptYesNo answers with its default and promptHidden returns null, so a
+ * caller that NEEDS an answer (a wallet passphrase) should check this first and
+ * fail with a useful message instead of a confusing one downstream.
+ */
+export function canPrompt() {
+  return isTTY();
+}
+
+/**
  * Yes/No prompt. `defaultYes: true` lets a bare Enter mean Y.
  * Returns true / false, or null when the user aborts with Ctrl-C.
  */

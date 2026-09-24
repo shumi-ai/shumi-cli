@@ -43,6 +43,47 @@ describe('the quota block is turned into something a user can act on', () => {
   });
 });
 
+describe('the lifetime grant is not described as resetting', () => {
+  // The free tier is a lifetime grant plus a one-a-day drip. Only the drip
+  // refills; `reset_at` is when it next does. "10 of 10 per lifetime used.
+  // Resets in 8h" promised ten queries back and delivered one.
+  const GRANT_GATE = {
+    tier: 'free',
+    used: 10,
+    limit: 10,
+    quota: { used: 10, limit: 10, remaining: 0, period: 'lifetime', wall: 'grant' },
+    reset_at: new Date(Date.now() + 8 * 3600_000).toISOString(),
+    upgrade_url: 'https://shumi.ai/pricing',
+  };
+
+  it('says the grant is used up and that one free query comes back', () => {
+    const out = describeGate(GRANT_GATE);
+    expect(out).toContain('10 of 10 lifetime queries used on the free tier');
+    expect(out).toContain('Your next free query unlocks in 8h.');
+    expect(out).not.toMatch(/Resets/);
+    expect(out).not.toContain('per lifetime');
+  });
+
+  it('keys off the wall too, for a gate that carries no period', () => {
+    const out = describeGate({ ...GRANT_GATE, quota: { used: 10, limit: 10, wall: 'grant' } });
+    expect(out).toContain('10 of 10 lifetime queries used');
+    expect(out).not.toMatch(/Resets/);
+  });
+
+  it('promises a free query only on the free tier', () => {
+    const out = describeGate({ ...GRANT_GATE, tier: 'access' });
+    expect(out).toContain('10 of 10 lifetime queries used on the access tier');
+    expect(out).not.toContain('free query');
+    expect(out).not.toMatch(/Resets/);
+  });
+
+  it('keeps "Resets" for a daily quota, which does reset', () => {
+    const out = describeGate({ ...LIVE_GATE, reset_at: GRANT_GATE.reset_at });
+    expect(out).toContain('1 of 1 per day');
+    expect(out).toContain('Resets in 8h.');
+  });
+});
+
 describe('reset time is phrased relatively', () => {
   it('uses minutes under an hour and hours under two days', () => {
     expect(resetPhrase(new Date(Date.now() + 30 * 60_000).toISOString())).toMatch(/in 30m/);
