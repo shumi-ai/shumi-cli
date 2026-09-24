@@ -73,7 +73,7 @@ shumi trends --limit 10           # Limit results
 
 ```bash
 shumi scan --trend UP --category "DeFi"    # Uptrending DeFi coins
-shumi scan --exchange Hyperliquid          # Coins listed on Hyperliquid
+shumi scan --category "Layer 2"            # Category names are matched forgivingly
 shumi scan --mcap-min 100000000            # Market cap > $100M
 shumi scan --trend DOWN --limit 5          # Top 5 downtrending
 ```
@@ -143,5 +143,6 @@ The `steps` array contains each tool's raw output with the full data payload.
 
 - Use `--raw` when you need to extract specific data points from the response
 - `shumi ask` accepts any natural language query — use it for questions that don't fit a specific command
-- Combine scan filters: `shumi scan --trend UP --category "AI" --exchange Hyperliquid --limit 10`
+- Combine scan filters: `shumi scan --trend UP --category "AI" --mcap-min 100000000 --limit 10`
+- `shumi scan` has no exchange filter yet; `--exchange` is refused with an explanation rather than returning spot-only listings
 - `shumi health` is a quick way to verify connectivity and auth status

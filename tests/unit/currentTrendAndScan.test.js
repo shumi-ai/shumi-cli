@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { currentTrendLine, renderCoinLookup } from '../../src/lib/currentTrend.js';
 import { scanQuery, scanFetch, registerScanCommand, SCAN_SORT_FIELDS, EMPTY_SCAN_NOTE } from '../../src/commands/scan.js';
 import { applyClientFilters } from '../../src/lib/output.js';
+import { ApiError } from '../../src/lib/api-client.js';
 import { getSchema } from '../../src/lib/schema.js';
 import { applyBulkSchemas } from '../../src/lib/bulkSchemas.js';
 import { registerCoinCommand } from '../../src/commands/coin.js';
@@ -56,15 +57,20 @@ describe('renderCoinLookup', () => {
 });
 
 describe('scan', () => {
-  it('sends the parameter names /api/coins/filter reads', () => {
-    expect(scanQuery({ trend: 'UP', category: 'Meme', mcapMin: '1000000', mcapMax: '5000000', exchange: 'Binance', limit: '10' })).toEqual({
+  it('sends the parameter names /api/coins/filter reads for category and market cap', () => {
+    expect(scanQuery({ trend: 'UP', category: 'Meme', mcapMin: '1000000', mcapMax: '5000000', limit: '10' })).toEqual({
       trend: 'UP',
       categories: 'Meme',
       marketCapMin: '1000000',
       marketCapMax: '5000000',
-      exchanges: 'Binance',
       limit: '10',
     });
+  });
+
+  it('sends --exchange as `exchange`, never `exchanges`, so the server can refuse it', () => {
+    const q = scanQuery({ exchange: 'Hyperliquid' });
+    expect(q).toEqual({ exchange: 'Hyperliquid' });
+    expect(q).not.toHaveProperty('exchanges');
   });
 
   it('maps --sort / --order to sortBy / sortOrder', () => {
@@ -111,18 +117,21 @@ describe('renderCoinLookup does not repeat the trend', () => {
 
 describe('scan name handling (local only)', () => {
   const COINS = [
-    { name: 'Dogecoin', categories: ['Meme'], exchanges: ['Binance', 'Coinbase Exchange'] },
-    { name: 'Arbitrum', categories: ['Layer-2'], exchanges: ['Binance'] },
-    { name: 'Tiny', categories: ['Some Small Category'], exchanges: ['Bitstamp'] },
+    { name: 'Dogecoin', categories: ['Meme'] },
+    { name: 'Arbitrum', categories: ['Layer-2'] },
+    { name: 'Tiny', categories: ['Some Small Category'] },
   ];
-  // Behaves like /api/coins/filter: exact case-sensitive category, case-insensitive exchange.
+  const EXCHANGE_REFUSAL = 'The exchange filter is not available on scan yet. Filter the returned coins with `shumi coin risk` or the funding routes instead.';
+  // Behaves like /api/cli/scan since coinrotator-ai eaca92dd: refuses `exchange` with a 400,
+  // and matches categories ignoring case and punctuation.
+  const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
   function fakeGet({ coins = COINS, wrap = false } = {}) {
     const calls = [];
     const get = async (route, q = {}) => {
       calls.push({ route, q });
+      if ('exchange' in q) throw new ApiError(400, { schemaVersion: 1, error: { code: 'BAD_REQUEST', message: EXCHANGE_REFUSAL } });
       const rows = coins
-        .filter((x) => !q.categories || x.categories.includes(q.categories))
-        .filter((x) => !q.exchanges || x.exchanges.some((e) => e.toLowerCase() === String(q.exchanges).toLowerCase()))
+        .filter((x) => !q.categories || x.categories.some((cat) => norm(cat) === norm(q.categories)))
         .map((x) => x.name);
       return { schemaVersion: 1, data: wrap ? { rows, coverage: { withChange: rows.length } } : rows };
     };
@@ -131,7 +140,7 @@ describe('scan name handling (local only)', () => {
   const json = { json: true };
 
   it('is always exactly one call to scan', async () => {
-    for (const q of [{ categories: 'Meme' }, { categories: 'meme' }, { categories: 'Nope' }, { exchanges: 'Krakenn' }, {}]) {
+    for (const q of [{ categories: 'Meme' }, { categories: 'meme' }, { categories: 'Nope' }, {}]) {
       const { get, calls } = fakeGet();
       await scanFetch('scan', q, json, get);
       expect(calls.map((c) => c.route), JSON.stringify(q)).toEqual(['scan']);
@@ -146,32 +155,67 @@ describe('scan name handling (local only)', () => {
     expect(env.meta?.note).toBeUndefined();
   });
 
-  it('rewrites known misspellings and short venue names locally', async () => {
-    for (const [asked, real, coin] of [['meme', 'Meme', 'Dogecoin'], ['Layer 2', 'Layer-2', 'Arbitrum']]) {
+  it('leaves spelling to the server: case and punctuation variants go out as typed', async () => {
+    for (const [asked, coin] of [['meme', 'Dogecoin'], ['Layer 2', 'Arbitrum'], ['layer-2', 'Arbitrum']]) {
+      const { get, calls } = fakeGet();
+      const env = await scanFetch('scan', { categories: asked }, json, get);
+      expect(calls[0].q.categories).toBe(asked);
+      expect(env.data).toEqual([coin]);
+      expect(env.meta?.note).toBeUndefined();
+    }
+  });
+
+  it('rewrites only synonyms the server cannot resolve', async () => {
+    for (const [asked, real, coin] of [['l2', 'Layer-2', 'Arbitrum'], ['memecoins', 'Meme', 'Dogecoin']]) {
       const { get, calls } = fakeGet();
       const env = await scanFetch('scan', { categories: asked }, json, get);
       expect(calls[0].q.categories).toBe(real);
       expect(env.data).toEqual([coin]);
       expect(env.meta.note).toContain(`"${asked}" sent as "${real}"`);
     }
-    const { get, calls } = fakeGet();
-    await scanFetch('scan', { exchanges: 'coinbase' }, json, get);
-    expect(calls[0].q.exchanges).toBe('Coinbase Exchange');
   });
 
-  it('sends unknown or small names as given, and a real venue outside any list works', async () => {
+  it('sends unknown or small names as given', async () => {
     const env = await scanFetch('scan', { categories: 'Some Small Category' }, json, fakeGet().get);
     expect(env.data).toEqual(['Tiny']);
-    const env2 = await scanFetch('scan', { exchanges: 'Bitstamp' }, json, fakeGet().get);
-    expect(env2.data).toEqual(['Tiny']);
+  });
+
+  it('surfaces the server refusal of --exchange as the error, with no local rewrite', async () => {
+    const { get, calls } = fakeGet();
+    await expect(scanFetch('scan', scanQuery({ exchange: 'coinbase', trend: 'UP' }), json, get))
+      .rejects.toMatchObject({ status: 400, message: EXCHANGE_REFUSAL });
+    expect(calls[0].q).toEqual({ exchange: 'coinbase', trend: 'UP' });
+  });
+
+  it('prints the refusal as a CLI error through typedAction', async () => {
+    const errOut = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((s) => { errOut.push(String(s)); return true; });
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const { typedAction } = await import('../../src/lib/typedCmd.js');
+      const handler = typedAction({
+        route: 'scan',
+        query: (ctx, opts) => scanQuery(opts),
+        fetch: (r, q, o) => scanFetch(r, q, o, fakeGet().get),
+      });
+      const opts = { exchange: 'Hyperliquid', json: true };
+      await handler(opts, { name: () => 'scan', parent: null, optsWithGlobals: () => opts, opts: () => opts });
+    } finally {
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+    }
+    const printed = errOut.join('');
+    expect(printed).toContain('BAD_REQUEST');
+    expect(printed).toContain('exchange filter is not available on scan yet');
   });
 
   it('returns an empty result with a note, never an error', async () => {
     const env = await scanFetch('scan', { categories: 'Layer Two' }, json, fakeGet().get);
     expect(env.data).toEqual([]);
     expect(env.meta.note).toBe(EMPTY_SCAN_NOTE);
-    expect(EMPTY_SCAN_NOTE).toMatch(/exact and case-sensitive/);
-    const env2 = await scanFetch('scan', { exchanges: 'Bitstamp', trend: 'UP' }, json, fakeGet({ coins: [] }).get);
+    expect(EMPTY_SCAN_NOTE).not.toMatch(/case-sensitive|exact/);
+    expect(EMPTY_SCAN_NOTE).toMatch(/shumi category list/);
+    const env2 = await scanFetch('scan', { categories: 'Meme', trend: 'UP' }, json, fakeGet({ coins: [] }).get);
     expect(env2.data).toEqual([]);
     expect(env2.meta.note).toBe(EMPTY_SCAN_NOTE);
     const env3 = await scanFetch('scan', { trend: 'UP' }, json, fakeGet({ coins: [] }).get);
@@ -185,7 +229,7 @@ describe('scan name handling (local only)', () => {
   });
 
   it('unwraps { rows } so --fields and --top apply to the rows', async () => {
-    const coins = [{ name: 'Dogecoin', categories: ['Meme'], exchanges: [] }, { name: 'Pepe', categories: ['Meme'], exchanges: [] }];
+    const coins = [{ name: 'Dogecoin', categories: ['Meme'] }, { name: 'Pepe', categories: ['Meme'] }];
     const env = await scanFetch('scan', { categories: 'Meme', sortBy: 'change24h' }, json, fakeGet({ coins, wrap: true }).get);
     expect(env.data).toEqual(['Dogecoin', 'Pepe']);
     expect(env.meta.coverage).toEqual({ coverage: { withChange: 2 } });
