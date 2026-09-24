@@ -120,6 +120,35 @@ export class ApiError extends Error {
   }
 }
 
+const NETWORK_CAUSE_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+  'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE',
+]);
+
+/**
+ * Did the request itself fail to reach the server? fetch rejects with a
+ * TypeError ("fetch failed", usually with a `cause`), an AbortError, or a
+ * TimeoutError from AbortSignal.timeout. Anything else thrown during the call
+ * is a client-side fault.
+ */
+export function isNetworkFailure(err) {
+  if (!err) return false;
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+  const code = err.cause?.code;
+  if (typeof code === 'string' && (NETWORK_CAUSE_CODES.has(code) || code.startsWith('UND_ERR_'))) return true;
+  return err.name === 'TypeError' && (err.message === 'fetch failed' || err.cause != null);
+}
+
+/**
+ * Map a failed fetch to the NETWORK envelope (exit 6, which agents retry).
+ * Everything else is returned untouched, so renderErr reports it as INTERNAL
+ * (exit 7) rather than telling a caller to retry a bug.
+ */
+function networkOrRaw(err) {
+  if (!isNetworkFailure(err)) return err;
+  return new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
+}
+
 /**
  * GET a typed CLI endpoint (under `${API_URL}/<path>`). Returns the parsed JSON envelope.
  * Throws ApiError on non-2xx. Token is required (typed surface = paid surface).
@@ -168,7 +197,7 @@ export async function apiGet(path, query = {}) {
       });
     }
     captureApiRequest(route, 0, Date.now() - startedAt);
-    throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
+    throw networkOrRaw(err);
   }
 
   captureApiRequest(route, response.status, Date.now() - startedAt);
@@ -233,9 +262,7 @@ export async function query({ messages, raw = false, archetype = 'base', command
       });
     }
     captureApiRequest(route, 0, Date.now() - startedAt);
-    // Same shape apiGet throws, so renderErr maps it to exit 6 (NETWORK) and a
-    // "check your connection" hint instead of exit 7 and a bare "fetch failed".
-    throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
+    throw networkOrRaw(err);
   }
 
   captureApiRequest(route, response.status, Date.now() - startedAt);

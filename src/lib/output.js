@@ -186,12 +186,12 @@ function withNotices(env) {
  * Emit a machine error on stderr (always JSON envelope), set exit code, and return.
  * Caller decides whether to also print a friendly human line.
  */
-export function renderErr(err, opts = {}) {
+export function renderErr(err, opts = {}, telemetryContext = {}) {
   const mode = resolveMode(opts);
   const envelope = errEnvelopeFromError(err);
   if (shouldCaptureError(err)) {
     try {
-      captureError(err, { surface: 'renderErr', error_code: envelope?.error?.code });
+      captureError(err, { surface: 'renderErr', ...telemetryContext, error_code: envelope?.error?.code });
     } catch { /* telemetry must never affect error rendering */ }
   }
   // One rendering, not two. Both were emitted before, so an interactive user read

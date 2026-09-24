@@ -58,7 +58,7 @@ describe('the lifetime grant is not described as resetting', () => {
 
   it('says the grant is used up and that one free query comes back', () => {
     const out = describeGate(GRANT_GATE);
-    expect(out).toContain('all 10 lifetime queries used on the free tier');
+    expect(out).toContain('10 of 10 lifetime queries used on the free tier');
     expect(out).toContain('Your next free query unlocks in 8h.');
     expect(out).not.toMatch(/Resets/);
     expect(out).not.toContain('per lifetime');
@@ -66,7 +66,14 @@ describe('the lifetime grant is not described as resetting', () => {
 
   it('keys off the wall too, for a gate that carries no period', () => {
     const out = describeGate({ ...GRANT_GATE, quota: { used: 10, limit: 10, wall: 'grant' } });
-    expect(out).toContain('all 10 lifetime queries used');
+    expect(out).toContain('10 of 10 lifetime queries used');
+    expect(out).not.toMatch(/Resets/);
+  });
+
+  it('promises a free query only on the free tier', () => {
+    const out = describeGate({ ...GRANT_GATE, tier: 'access' });
+    expect(out).toContain('10 of 10 lifetime queries used on the access tier');
+    expect(out).not.toContain('free query');
     expect(out).not.toMatch(/Resets/);
   });
 

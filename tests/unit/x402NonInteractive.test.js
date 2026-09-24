@@ -81,7 +81,7 @@ describe('non-interactive payment with a locked keystore', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.category).toBe('PAYMENT_BLOCKED');
     expect(err.code).toBe('PAYMENT_REQUIRED');
-    expect(err.message).toContain('Out of quota: all 10 lifetime queries used on the free tier.');
+    expect(err.message).toContain('Out of quota: 10 of 10 lifetime queries used on the free tier.');
     expect(err.message).toContain('not an interactive terminal');
     expect(err.message).toContain('SHUMI_X402_PRIVATE_KEY');
     expect(err.message).toContain('https://shumi.ai/pricing');

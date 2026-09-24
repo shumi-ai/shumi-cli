@@ -39,7 +39,7 @@ function quotaError() {
   err.body = {
     error: {
       code: 'PAYMENT_REQUIRED',
-      message: 'Out of quota: all 10 lifetime queries used on the free tier.\n  Payment needed, but this is not an interactive terminal.',
+      message: 'Out of quota: 10 of 10 lifetime queries used on the free tier.\n  Payment needed, but this is not an interactive terminal.',
       details: { tier: 'free', quota: { used: 10, limit: 10, period: 'lifetime', wall: 'grant' } },
     },
   };

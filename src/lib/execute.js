@@ -1,7 +1,7 @@
 import { spinner as makeSpinner, renderErr } from './output.js';
 import { query } from './api-client.js';
 import { renderText, renderRaw } from './renderer.js';
-import { capture } from './telemetry.js';
+import { capture, captureError } from './telemetry.js';
 import { getToken } from './config.js';
 
 // Phase messages that rotate while waiting for the API response.
@@ -93,7 +93,9 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
     // reports real faults (5xx, network, internal) to error telemetry while
     // skipping paywall and auth events.
     spinner.stop();
-    renderErr(error, opts);
+    // Tagged so the NLP dashboards (command + surface 'nlp') keep matching the
+    // faults renderErr reports: 5xx, network, internal.
+    renderErr(error, opts, { command, surface: 'nlp' });
     try {
       capture('command_failed', {
         command,
@@ -102,6 +104,15 @@ export async function execute({ queryText, raw = false, archetype = 'base', comm
         http_status: typeof error?.status === 'number' ? error.status : undefined,
         duration_ms: Date.now() - startTime,
       });
+      // renderErr treats other 4xx as user errors and skips them. On the NLP
+      // path a 400/404/413/422 from /api/cli means the CLI built a request the
+      // server rejected, which these dashboards have always counted.
+      if (isCapturedNlp4xx(error?.status)) captureError(error, { command, surface: 'nlp' });
     } catch { /* ignore */ }
   }
+}
+
+function isCapturedNlp4xx(status) {
+  return typeof status === 'number' && status >= 400 && status < 500 &&
+    ![401, 402, 403, 429].includes(status);
 }

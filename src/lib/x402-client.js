@@ -128,12 +128,14 @@ function describeGate(gate) {
   // promised ten queries back and delivered one. Name what actually comes back.
   const lifetime = period === 'lifetime' || quota.wall === 'grant';
   const head = lifetime
-    ? `Out of quota: all ${limit} lifetime queries used${onTier}.`
+    ? `Out of quota: ${used} of ${limit} lifetime queries used${onTier}.`
     : `Out of quota: ${used} of ${limit}${typeof period === 'string' ? ` per ${period}` : ''} used${onTier}.`;
 
   const parts = [head];
   const reset = resetPhrase(gate.reset_at);
-  if (reset) parts.push(lifetime ? `Your next free query unlocks ${reset}.` : `Resets ${reset}.`);
+  if (reset && !lifetime) parts.push(`Resets ${reset}.`);
+  // Only the free tier has a daily drip behind its lifetime grant.
+  else if (reset && tier === 'free') parts.push(`Your next free query unlocks ${reset}.`);
   if (typeof gate.upgrade_url === 'string') parts.push(`Upgrade: ${gate.upgrade_url}`);
   return parts.join(' ');
 }
@@ -593,8 +595,20 @@ export async function fetchWithX402(input, init = {}) {
 
     // Unlock + sign.
     const passphrase = await resolvePassphrase();
-    const privateKey = loadPrivateKey({ passphrase });
-    const paymentClient = createPaymentClient(privateKey);
+    // A wrong passphrase, an unreadable keystore or a malformed
+    // SHUMI_X402_PRIVATE_KEY is a billing-side user problem (exit 3), not a
+    // network failure. Left raw, api-client could not tell it from one.
+    let paymentClient;
+    try {
+      paymentClient = createPaymentClient(loadPrivateKey({ passphrase }));
+    } catch (err) {
+      // Never keep a passphrase that did not work for a later call.
+      passphraseCache = null;
+      throw paymentBlocked(
+        `Could not unlock wallet: ${err.message}`,
+        'Check the passphrase or SHUMI_X402_PRIVATE_KEY and try again. Nothing was charged.'
+      );
+    }
 
     let paymentHeader;
     try {
