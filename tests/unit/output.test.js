@@ -219,6 +219,11 @@ describe('pauseActiveSpinner', () => {
   // Asserted through stop/start calls rather than ora's `isSpinning`, which stays
   // false under vitest whether or not the spinner is running.
   const realTTY = process.stdout.isTTY;
+  // spinner() refuses to start without a usable width (see the 0-column tests
+  // below), and vitest's stderr reports none. Give it one.
+  const realColumns = process.stderr.columns;
+  beforeEach(() => { process.stderr.columns = 80; });
+  afterEach(() => { process.stderr.columns = realColumns; });
 
   it('stops the running spinner and restarts it with its text on resume', async () => {
     const { spinner, pauseActiveSpinner } = await import('../../src/lib/output.js');
@@ -290,5 +295,44 @@ describe('renderErr emits one rendering, not two', () => {
     const lines = out.trim().split('\n').filter(Boolean);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0])).toMatchObject({ error: { code: 'PAYMENT_REQUIRED' } });
+  });
+});
+
+describe('spinner() on a terminal with no usable width', () => {
+  // ora sizes its line-clearing by `stream.columns ?? 80`. A pty reporting 0
+  // columns (`script -q /dev/null` from a non-interactive parent, some
+  // `docker run -t` / CI setups) slips past the `??`, ora's clear() loops
+  // forever writing cursor-up/erase-line, and the command never returns — not
+  // even the request timeout can fire while that loop holds the event loop.
+  const realTTY = process.stdout.isTTY;
+  const realColumns = process.stderr.columns;
+  afterEach(() => {
+    process.stdout.isTTY = realTTY;
+    process.stderr.columns = realColumns;
+  });
+
+  async function spinnerWithColumns(columns) {
+    const { spinner } = await import('../../src/lib/output.js');
+    process.stdout.isTTY = true; // human mode, so only the width decides
+    process.stderr.columns = columns;
+    return spinner('working…', {});
+  }
+
+  for (const columns of [0, undefined, NaN, -1]) {
+    it(`returns the inert stub at columns=${columns}`, async () => {
+      const s = await spinnerWithColumns(columns);
+      // The stub has no ora state; a real instance always carries isSpinning.
+      expect('isSpinning' in s).toBe(false);
+      expect(() => { s.text = 'next phase'; s.succeed('done'); s.fail('x'); s.stop(); }).not.toThrow();
+    });
+  }
+
+  it('still starts a real spinner on a terminal with a width', async () => {
+    const s = await spinnerWithColumns(80);
+    try {
+      expect('isSpinning' in s).toBe(true);
+    } finally {
+      s.stop();
+    }
   });
 });

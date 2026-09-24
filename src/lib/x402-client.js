@@ -32,7 +32,7 @@ import {
   USDC_DECIMALS,
 } from './wallet.js';
 import { chainForNetwork, knownAsset } from './x402-chains.js';
-import { promptYesNo, promptHidden } from './prompt.js';
+import { promptYesNo, promptHidden, canPrompt } from './prompt.js';
 import { pauseActiveSpinner } from './output.js';
 import { capture } from './telemetry.js';
 
@@ -122,12 +122,18 @@ function describeGate(gate) {
   if (!Number.isFinite(Number(limit))) return null;
 
   const tier = typeof gate.tier === 'string' ? gate.tier : null;
-  const window = typeof period === 'string' ? ` per ${period}` : '';
-  const head = `Out of quota: ${used} of ${limit}${window} used${tier ? ` on the ${tier} tier` : ''}.`;
+  const onTier = tier ? ` on the ${tier} tier` : '';
+  // The free lifetime grant never refills. Its `reset_at` is when the separate
+  // one-a-day drip next unlocks, so "10 of 10 per lifetime used. Resets in 8h"
+  // promised ten queries back and delivered one. Name what actually comes back.
+  const lifetime = period === 'lifetime' || quota.wall === 'grant';
+  const head = lifetime
+    ? `Out of quota: all ${limit} lifetime queries used${onTier}.`
+    : `Out of quota: ${used} of ${limit}${typeof period === 'string' ? ` per ${period}` : ''} used${onTier}.`;
 
   const parts = [head];
   const reset = resetPhrase(gate.reset_at);
-  if (reset) parts.push(`Resets ${reset}.`);
+  if (reset) parts.push(lifetime ? `Your next free query unlocks ${reset}.` : `Resets ${reset}.`);
   if (typeof gate.upgrade_url === 'string') parts.push(`Upgrade: ${gate.upgrade_url}`);
   return parts.join(' ');
 }
@@ -334,6 +340,25 @@ async function resolvePassphrase() {
 
 let passphraseCache = null;
 
+/** A signature will need a passphrase that nobody is there to type. */
+function needsPassphraseWithoutTerminal() {
+  return !hasEnvKey() && hasKeystore() && !passphraseCache && !isAgentMode() && !canPrompt();
+}
+
+/**
+ * The ways out for a non-interactive caller, taken from the 402's gate block
+ * where the server supplied them. The subscription link falls back to pricing.
+ */
+function nonInteractiveUnlockHint(gate) {
+  const unlock = Array.isArray(gate?.unlock) ? gate.unlock : [];
+  const sub = unlock.find((u) => u?.method === 'subscription');
+  const url = sub?.upgrade_url || gate?.upgrade_url || 'https://shumi.ai/pricing';
+  const price = gate?.this_query?.price_usdc;
+  const perCall = price ? `pay $${price} per call` : 'pay per call';
+  return `Set SHUMI_X402_PRIVATE_KEY=0x<key> to ${perCall} without a prompt, ` +
+    `run the command in a terminal to unlock your wallet, or subscribe at ${url}`;
+}
+
 function truncAddress(addr) {
   return addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '?';
 }
@@ -434,6 +459,19 @@ export async function fetchWithX402(input, init = {}) {
       );
     }
     const selected = selectRequirement(usable);
+
+    // Only a passphrase-locked keystore and no terminal to type the passphrase
+    // into: payment cannot happen, so say so now. Before, promptYesNo silently
+    // answered "yes" off-TTY and promptHidden then returned null, so a script or
+    // agent out of free quota was told "No passphrase provided." — a sentence
+    // about input it was never asked for. Agent mode keeps its own message in
+    // resolvePassphrase.
+    if (needsPassphraseWithoutTerminal()) {
+      throw paymentBlocked(
+        'Payment needed, but this is not an interactive terminal, so the wallet passphrase cannot be asked for.',
+        nonInteractiveUnlockHint(gate)
+      );
+    }
     // v2 lifts the resource out of the row and onto the challenge body, so read it
     // from whichever place this version put it. It is what the prompt names as the
     // thing being bought, so an empty label here is a prompt that says nothing.
@@ -661,6 +699,7 @@ export async function fetchWithX402(input, init = {}) {
 // Exported for tests
 export const __testing = {
   describeGate,
+  nonInteractiveUnlockHint,
   resetPhrase,
   usdcStringToBaseUnits,
   baseUnitsToUsdcString,

@@ -7,12 +7,13 @@ export function registerSearchCommand(program) {
     .description('search the web for crypto information')
     .option('--answer', 'get a direct answer instead of search results')
     .option('--raw', 'output raw JSON data')
-    .action(async (queryText, options) => {
+    .action(async (queryText, options, cmd) => {
       const constructed = buildSearchQuery(queryText, options);
       await execute({
         queryText: constructed,
         raw: options.raw,
         commandContext: 'search',
+        opts: cmd.optsWithGlobals(),
       });
     });
 }

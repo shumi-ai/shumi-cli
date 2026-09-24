@@ -233,7 +233,9 @@ export async function query({ messages, raw = false, archetype = 'base', command
       });
     }
     captureApiRequest(route, 0, Date.now() - startedAt);
-    throw err;
+    // Same shape apiGet throws, so renderErr maps it to exit 6 (NETWORK) and a
+    // "check your connection" hint instead of exit 7 and a bare "fetch failed".
+    throw new ApiError(0, { error: { code: 'NETWORK', message: `Network error: ${err.message}` } });
   }
 
   captureApiRequest(route, response.status, Date.now() - startedAt);

@@ -53,11 +53,19 @@ export function resolveMode(opts = {}) {
 // prompt pause it — see pauseActiveSpinner.
 let activeSpinner = null;
 
+const SPINNER_STUB = Object.freeze({ start() { return this; }, stop() {}, succeed() {}, fail() {}, set text(_) {} });
+
 export function spinner(text, opts = {}) {
   const mode = resolveMode(opts);
-  if (mode.agent || mode.json) {
-    return { start() { return this; }, stop() {}, succeed() {}, fail() {}, set text(_) {} };
-  }
+  if (mode.agent || mode.json) return SPINNER_STUB;
+  // ora writes to stderr and sizes its line-clearing by `stream.columns ?? 80`.
+  // A pty that reports 0 columns (`script -q /dev/null` under a non-interactive
+  // parent, some `docker run -t` / CI setups) passes the `??` untouched, so ora
+  // computes an Infinity line count and its clear() loops forever writing
+  // cursor-up/erase-line (122 MB in 30 s, measured). That loop owns the event
+  // loop, so not even the request timeout can fire: the command hangs for good.
+  // No usable width means no spinner.
+  if (!(process.stderr.columns > 0)) return SPINNER_STUB;
   const instance = ora({ text, spinner: 'dots' }).start();
   activeSpinner = instance;
   for (const method of ['stop', 'succeed', 'fail']) {
