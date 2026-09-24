@@ -56,7 +56,7 @@ const SCHEMAS = {
 
   // Narratives / Scan
   'narratives':            { kind: 'object', fields: { success: 'boolean', sources: 'array', attention_state: 'object', freshness_score: 'number' }, note: 'no arg = list active; with name arg = sentiment for that narrative' },
-  'scan':                  { kind: 'array', fields: { '_item': 'string|object — coin name; with --sort change24h a row may carry its 24h change (change24h or change_24h_pct)' }, note: 'filters: --trend, --category, --mcap-min/max, --exchange, --limit; sort: --sort marketCap|change24h|streak|price, --order asc|desc (movers: --sort change24h)' },
+  'scan':                  { kind: 'array', fields: { '_item': 'string|object — coin name; with any other --sort a row is { name, <sort value> } (change_24h_pct / change_7d_pct for the change sorts)' }, note: 'filters: --trend, --category, --mcap-min/max, --exchange, --limit; sort: --sort marketCap|change24h|change7d|streak|price, --order asc|desc (movers: --sort change24h)' },
 
   // Regime
   'regime':                { kind: 'object', fields: { positions: 'array of {symbol, regime, conviction, ...}', meta: 'object' }, note: 'default action=active; see subcommands' },

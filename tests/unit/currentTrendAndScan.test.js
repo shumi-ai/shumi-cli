@@ -72,7 +72,7 @@ describe('scan', () => {
   });
 
   it('offers change24h as a sort and rejects unknown sort keys', () => {
-    expect(SCAN_SORT_FIELDS).toContain('change24h');
+    expect(SCAN_SORT_FIELDS).toEqual(expect.arrayContaining(['change24h', 'change7d']));
     const program = new Command().exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
     registerScanCommand(program);
     const scan = program.commands.find((cmd) => cmd.name() === 'scan');

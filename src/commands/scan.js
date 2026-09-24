@@ -1,8 +1,8 @@
 import { Option } from 'commander';
 import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 
-/** Sort keys /api/coins/filter accepts. change24h answers "what's pumping". */
-export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'streak', 'price'];
+/** Sort keys /api/coins/filter accepts. change24h / change7d answer "what's pumping". */
+export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'change7d', 'streak', 'price'];
 
 /**
  * Map CLI flags to the query /api/coins/filter reads. The server silently
@@ -38,9 +38,9 @@ export function registerScanCommand(program) {
     .option('--exchange <name>', 'filter by exchange')
     .option('--interval <interval>', 'trend interval (1d, 1w)')
     .option('--limit <n>', 'max results')
-    .addOption(new Option('--sort <field>', 'sort key (default marketCap); change24h = top movers').choices(SCAN_SORT_FIELDS))
+    .addOption(new Option('--sort <field>', 'sort key (default marketCap); change24h / change7d = top movers').choices(SCAN_SORT_FIELDS))
     .addOption(new Option('--order <dir>', 'desc (default) = largest first, asc = smallest first').choices(['asc', 'desc']))
-    .addHelpText('after', '\nTop 24h gainers: shumi scan --sort change24h --limit 10\nTop 24h losers:  shumi scan --sort change24h --order asc --limit 10')
+    .addHelpText('after', '\nTop 24h gainers: shumi scan --sort change24h --limit 10\nTop 24h losers:  shumi scan --sort change24h --order asc --limit 10\nTop 7d gainers:  shumi scan --sort change7d --limit 10')
     .action(typedAction({
       route: 'scan',
       query: (ctx, opts) => scanQuery(opts),
