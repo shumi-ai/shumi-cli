@@ -14,10 +14,10 @@ const SCHEMAS = {
   // Coin
   'coin.sentiment':    { kind: 'object', fields: { symbol: 'string', success: 'boolean', data: 'object — sentiment summary fields' } },
   'coin.historical':   { kind: 'object', fields: { marketCap: 'number|null', volume: 'number|null', openInterest: 'number', fundingRate: 'number', futuresVolume24h: 'number', priceUSD: 'number' } },
-  'coin.by-id':        { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap, ... }', trends: 'array', average_streak: 'number' } },
-  'coin.by-name':      { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }', trends: 'array', average_streak: 'number' } },
+  'coin.by-id':        { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap, ... }', trends: 'array', average_streak: 'number', currentTrend: 'object|null — { trend: UP|DOWN|HODL, since, days, asOf, incompleteDayExcluded }; the CURRENT trend, read this rather than the last trends row', currentTrendWeekly: 'object|null — same shape, weekly (when sent)' } },
+  'coin.by-name':      { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }', trends: 'array', average_streak: 'number', currentTrend: 'object|null — { trend: UP|DOWN|HODL, since, days, asOf, incompleteDayExcluded }; the CURRENT trend, read this rather than the last trends row', currentTrendWeekly: 'object|null — same shape, weekly (when sent)' } },
   'coin.by-contract':  { kind: 'object', fields: { coin: 'object — { id, name, symbol, ... }' }, note: 'requires --chain' },
-  'coin.lookup':       { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap }', trends: 'array' } },
+  'coin.lookup':       { kind: 'object', fields: { coin: 'object — { id, name, symbol, marketCap }', trends: 'array — history of trend runs', currentTrend: 'object|null — { trend: UP|DOWN|HODL, since, days, asOf, incompleteDayExcluded }; the CURRENT trend, read this rather than the last trends row', currentTrendWeekly: 'object|null — same shape, weekly (when sent)' } },
 
   // Market
   'market.prices':     { kind: 'object', fields: { prices: 'object — keyed by coin id, each {coinId, price, source, ts}', ts: 'number — unix ms', baselines: 'object — optional, when --baselines' } },
@@ -56,7 +56,7 @@ const SCHEMAS = {
 
   // Narratives / Scan
   'narratives':            { kind: 'object', fields: { success: 'boolean', sources: 'array', attention_state: 'object', freshness_score: 'number' }, note: 'no arg = list active; with name arg = sentiment for that narrative' },
-  'scan':                  { kind: 'array', fields: { '_item': 'object — coin matching filter criteria' }, note: 'filters: --trend, --category, --mcap-min/max, --exchange, --limit' },
+  'scan':                  { kind: 'array', fields: { '_item': 'string|object — coin name; with --sort change24h a row may carry its 24h change (change24h or change_24h_pct)' }, note: 'filters: --trend, --category, --mcap-min/max, --exchange, --limit; sort: --sort marketCap|change24h|streak|price, --order asc|desc (movers: --sort change24h)' },
 
   // Regime
   'regime':                { kind: 'object', fields: { positions: 'array of {symbol, regime, conviction, ...}', meta: 'object' }, note: 'default action=active; see subcommands' },

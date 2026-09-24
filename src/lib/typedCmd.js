@@ -36,7 +36,7 @@ function commandNames(cmd) {
  *     route: 'futures',
  *     query: (ctx, opts) => ({ action: 'state' }),
  *     spinner: 'futures state…',
- *     human: (data, chalk) => ...,   // optional — falls back to smartFormat
+ *     human: (data, chalk, opts) => ...,   // optional — falls back to smartFormat
  *   }))
  *
  * Universal flags (added to the parent command via addUniversalFlags):
@@ -76,7 +76,7 @@ export function typedAction({ route, query, spinner: spinnerText, human }) {
       const env = await apiGet(r, q);
       s.stop();
       const filtered = applyClientFilters(env, opts);
-      renderOk(filtered, opts, human || ((data, chalk) => smartFormat(data, chalk, opts)));
+      renderOk(filtered, opts, human ? (data, chalk) => human(data, chalk, opts) : (data, chalk) => smartFormat(data, chalk, opts));
       try {
         capture('command_completed', {
           command,
