@@ -7,11 +7,26 @@ import { authExpiryNotice, describeExpiry } from './authNotice.js';
 import { applyContextGuard } from './spill.js';
 
 /**
- * Decide whether an error is a real fault worth capturing (5xx, network,
- * internal/parse) vs. routine user-gating noise (401/403/429, payment blocks)
- * that is a product event, not an error. Never throws.
+ * Decide whether an error is a real fault worth a PostHog `$exception`.
+ *
+ * Captured:
+ *   - network failures (status 0 / code NETWORK) and upstream 5xx;
+ *   - genuine `Error` instances with no HTTP status: something threw that we
+ *     did not plan for (internal bug, parse failure, filesystem error).
+ *
+ * Not captured:
+ *   - routine gating (401/402/403/429, payment blocks, AUTH_REQUIRED,
+ *     RATE_LIMITED, PAYMENT_REQUIRED) — product events, not errors;
+ *   - other 4xx — user errors;
+ *   - plain objects (`{ message: 'Cancelled.' }`, `{ envelope: … }`). Commands
+ *     build these on purpose to tell the user something (a cancelled prompt, a
+ *     passphrase mismatch, a bad flag). Nothing failed. A real failure that has
+ *     to reach PostHog must arrive as an `Error` (or carry a 5xx/network status).
+ *
+ * The `cli_error` analytics event is recorded by captureError, so it follows
+ * the same rule. Never throws.
  */
-function shouldCaptureError(err) {
+export function shouldCaptureError(err) {
   try {
     const status = typeof err?.status === 'number' ? err.status : null;
     if (status === 401 || status === 403 || status === 429 || status === 402) return false;
@@ -19,9 +34,8 @@ function shouldCaptureError(err) {
     const code = err?.envelope?.error?.code || err?.body?.error?.code || err?.code;
     if (code === 'AUTH_REQUIRED' || code === 'RATE_LIMITED' || code === 'PAYMENT_REQUIRED') return false;
     if (status === 0 || code === 'NETWORK') return true; // network failure
-    if (status !== null && status >= 500) return true; // upstream 5xx
-    if (status === null) return true; // no HTTP status → internal/unexpected
-    return false; // other 4xx are user errors, not faults
+    if (status !== null) return status >= 500; // upstream 5xx yes, other 4xx no
+    return err instanceof Error; // thrown and unplanned → fault; hand-built message → not
   } catch {
     return false;
   }

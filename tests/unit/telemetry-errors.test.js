@@ -101,6 +101,22 @@ describe('helpers', () => {
     expect(s.stack).not.toContain(homedir());
   });
 
+  it('sanitizeError caps the message inside the stack too, and keeps the frames', () => {
+    const e = new Error(`boom ${'b'.repeat(2000)}`);
+    const s = sanitizeError(e);
+    const header = s.stack.split('\n')[0];
+    expect(header).toBe(`Error: ${s.message}`);
+    expect(s.stack).not.toContain('b'.repeat(600));
+    expect(s.stack).toMatch(/\n\s+at /);
+  });
+
+  it('sanitizeError caps a multi-line message in the stack', () => {
+    const e = new Error(`line one\n  -> ${'c'.repeat(800)}`);
+    const s = sanitizeError(e);
+    expect(s.stack.startsWith(`Error: ${s.message}`)).toBe(true);
+    expect(s.stack).not.toContain('c'.repeat(600));
+  });
+
   it('release stage: installed package is production, checkout is development', () => {
     expect(resolveReleaseStage('/usr/local/lib/node_modules/shumi/src/lib/telemetry.js')).toBe('production');
     expect(resolveReleaseStage('/home/x/code/shumi-cli/src/lib/telemetry.js')).toBe('development');

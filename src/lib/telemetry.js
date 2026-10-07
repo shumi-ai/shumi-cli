@@ -231,7 +231,14 @@ export function sanitizeError(error) {
   const scrub = (s) => (home && typeof s === 'string' ? s.split(home).join('~') : s);
   const out = new Error(scrub(String(src.message ?? '').slice(0, 500)));
   out.name = src.name || 'Error';
-  if (typeof src.stack === 'string') out.stack = scrub(src.stack);
+  // The stack's first line(s) repeat the raw message (`Name: message\n    at …`),
+  // so copying it whole would ship the uncapped message the line above trimmed.
+  // Rebuild the header from the capped message and keep only the frames.
+  if (typeof src.stack === 'string') {
+    const firstFrame = src.stack.search(/\n\s+at /);
+    const frames = firstFrame === -1 ? '' : src.stack.slice(firstFrame);
+    out.stack = `${out.name}: ${out.message}${scrub(frames)}`;
+  }
   return out;
 }
 
