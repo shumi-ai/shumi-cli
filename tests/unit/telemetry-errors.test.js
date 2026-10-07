@@ -110,6 +110,14 @@ describe('helpers', () => {
     expect(s.stack).toMatch(/\n\s+at /);
   });
 
+  it('sanitizeError does not mistake a stack inside the message for the frames', () => {
+    const inner = new Error('inner');
+    const e = new Error(`wrapped: ${inner.stack}\n${'d'.repeat(800)}`);
+    const s = sanitizeError(e);
+    expect(s.stack.startsWith(`Error: ${s.message}`)).toBe(true);
+    expect(s.stack).not.toContain('d'.repeat(600));
+  });
+
   it('sanitizeError caps a multi-line message in the stack', () => {
     const e = new Error(`line one\n  -> ${'c'.repeat(800)}`);
     const s = sanitizeError(e);

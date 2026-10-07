@@ -235,8 +235,12 @@ export function sanitizeError(error) {
   // so copying it whole would ship the uncapped message the line above trimmed.
   // Rebuild the header from the capped message and keep only the frames.
   if (typeof src.stack === 'string') {
-    const firstFrame = src.stack.search(/\n\s+at /);
-    const frames = firstFrame === -1 ? '' : src.stack.slice(firstFrame);
+    // Search for frames only after the header, so a message that itself holds a
+    // stack (a wrapper built from `inner.stack`) cannot pass for the frames.
+    const header = `${src.name}: ${src.message}`;
+    const from = src.stack.startsWith(header) ? header.length : 0;
+    const rel = src.stack.slice(from).search(/\n\s+at /);
+    const frames = rel === -1 ? '' : src.stack.slice(from + rel);
     out.stack = `${out.name}: ${out.message}${scrub(frames)}`;
   }
   return out;

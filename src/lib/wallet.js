@@ -106,6 +106,8 @@ function encryptKeystore(privateKey, passphrase, address) {
   };
 }
 
+export const WRONG_PASSPHRASE_MESSAGE = 'Invalid passphrase or corrupted keystore.';
+
 function decryptKeystore(keystore, passphrase) {
   if (keystore.format !== KEYSTORE_FORMAT) {
     throw new Error(`Unknown keystore format: ${keystore.format}. Expected ${KEYSTORE_FORMAT}.`);
@@ -121,7 +123,7 @@ function decryptKeystore(keystore, passphrase) {
   try {
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch (err) {
-    throw new Error('Invalid passphrase or corrupted keystore.');
+    throw new Error(WRONG_PASSPHRASE_MESSAGE);
   }
   return '0x' + plaintext.toString('hex');
 }
