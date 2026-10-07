@@ -2,7 +2,7 @@ import { apiGet } from './api-client.js';
 import chalk from 'chalk';
 import { renderOk, renderErr, spinner, applyClientFilters, resolveMode } from './output.js';
 import { smartFormat } from './smartFormat.js';
-import { capture, captureError } from './telemetry.js';
+import { capture } from './telemetry.js';
 import { getToken } from './config.js';
 
 /**
@@ -100,9 +100,11 @@ export function typedAction({ route, query, spinner: spinnerText, human, fetch }
           http_status: typeof err?.status === 'number' ? err.status : undefined,
           duration_ms: Date.now() - startedAt,
         });
-        captureError(err, { command, subcommand, surface: 'typed_command' });
       } catch { /* ignore */ }
-      renderErr(err, opts);
+      // renderErr owns the $exception: it reports only real faults (5xx, network,
+      // no status) via shouldCaptureError, so a typed-command failure is sent once
+      // and expected outcomes (401/402/403/404/429) are not reported as errors.
+      renderErr(err, opts, { command, subcommand, surface: 'typed_command' });
     }
   };
 }
