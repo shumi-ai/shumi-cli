@@ -24,6 +24,7 @@ vi.mock('../../src/lib/config.js', () => ({ getToken: vi.fn(() => null) }));
 const { apiGet } = await import('../../src/lib/api-client.js');
 const { renderOk, renderErr } = await import('../../src/lib/output.js');
 const { typedAction } = await import('../../src/lib/typedCmd.js');
+const telemetry = await import('../../src/lib/telemetry.js');
 
 /** Minimal Commander-shaped command. */
 function fakeCmd(globalOpts = {}) {
@@ -104,5 +105,16 @@ describe('error path', () => {
     await handler({}, fakeCmd({}));
     expect(renderErr).toHaveBeenCalledTimes(1);
     expect(renderOk).not.toHaveBeenCalled();
+  });
+
+  it('leaves the $exception to renderErr: one report per failure, with typed-command context', async () => {
+    telemetry.captureError.mockClear();
+    renderErr.mockClear();
+    const err = Object.assign(new Error('rate limited'), { status: 429 });
+    apiGet.mockRejectedValueOnce(err);
+    const handler = typedAction({ route: 'futures', query: {} });
+    await handler({}, fakeCmd({}));
+    expect(telemetry.captureError).not.toHaveBeenCalled();
+    expect(renderErr).toHaveBeenCalledWith(err, expect.anything(), expect.objectContaining({ surface: 'typed_command' }));
   });
 });

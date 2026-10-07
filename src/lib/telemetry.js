@@ -28,8 +28,13 @@
  * additionally truncates wallet addresses it derives itself.
  */
 
+import { createRequire } from 'module';
+import { homedir } from 'os';
+import { fileURLToPath } from 'url';
 import { PostHog } from 'posthog-node';
 import { getDeviceId, getWalletAddress, isTelemetryOptedOut } from './config.js';
+
+const require = createRequire(import.meta.url);
 
 const DEFAULT_POSTHOG_KEY = 'phc_xBnChEMGfPyg3CUKngxDcQsespURUnWKaUrfBdOOCyI';
 const DEFAULT_POSTHOG_HOST = 'https://t.shumi.ai';
@@ -44,6 +49,32 @@ let client = null; // posthog-node instance, or null when disabled
 let initialized = false;
 let enabled = false;
 let captured = false; // whether any event was queued this process
+const pendingExceptions = new Set(); // in-flight $exception sends, awaited by flush()
+
+/** CLI version from package.json — the `app_version` on every $exception. */
+function readAppVersion() {
+  try {
+    return require('../../package.json').version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+const APP_VERSION = readAppVersion();
+
+/**
+ * 'production' when running from an installed package (npm i -g / npx put the
+ * code under node_modules), 'development' when running from a git checkout
+ * (`node bin/shumi.js`, `npm link`). Exported for tests.
+ */
+export function resolveReleaseStage(moduleUrl = import.meta.url) {
+  try {
+    const path = moduleUrl.startsWith('file:') ? fileURLToPath(moduleUrl) : moduleUrl;
+    return /[\\/]node_modules[\\/]/.test(path) ? 'production' : 'development';
+  } catch {
+    return 'production';
+  }
+}
+const RELEASE_STAGE = resolveReleaseStage();
 
 /** First6…last4 wallet truncation. Exported for reuse by event-emitting code. */
 export function truncWallet(addr) {
@@ -185,11 +216,34 @@ export function capture(event, properties = {}) {
 }
 
 /**
- * Capture an exception as a structured error event. Strips messages of obvious
- * secret-bearing shapes is the caller's job; here we only record the error
- * name/message/code and provided context. Never throws.
+ * Copy of the error safe to send to PostHog Error Tracking: message capped at
+ * 500 chars (as for `cli_error`) and the user's home directory replaced by `~`
+ * in message and stack, so a local username never leaves the machine.
  */
-export function captureError(error, context = {}) {
+export function sanitizeError(error) {
+  const src = error instanceof Error ? error : new Error(String(error?.message ?? error));
+  let home = '';
+  try {
+    home = homedir();
+  } catch {
+    home = '';
+  }
+  const scrub = (s) => (home && typeof s === 'string' ? s.split(home).join('~') : s);
+  const out = new Error(scrub(String(src.message ?? '').slice(0, 500)));
+  out.name = src.name || 'Error';
+  if (typeof src.stack === 'string') out.stack = scrub(src.stack);
+  return out;
+}
+
+/**
+ * Capture an exception. Records two things, both fire-and-forget:
+ *   - the existing `cli_error` analytics event (name/message/code + context);
+ *   - a PostHog Error Tracking `$exception` with the cross-service contract
+ *     (surface, severity, release_stage, app_version, handled).
+ * Callers pass `{ handled: false }` from the last-resort process hooks.
+ * Respects the same opt-outs as every other event. Never throws.
+ */
+export function captureError(error, context = {}, { handled = true, severity = 'error' } = {}) {
   try {
     if (!initialized) initTelemetry();
     if (!enabled || !client) return;
@@ -201,6 +255,25 @@ export function captureError(error, context = {}) {
       http_status: typeof err.status === 'number' ? err.status : undefined,
       ...context,
     });
+    // `surface` must stay 'cli' on $exception (Doctor groups by it); a caller's
+    // own `surface` (e.g. 'nlp', 'renderErr') is kept as `error_source`.
+    const { surface: errorSource, ...rest } = context;
+    const props = baseProps({
+      ...rest,
+      ...(errorSource ? { error_source: errorSource } : {}),
+      error_code: err.code ?? err.envelope?.error?.code ?? err.body?.error?.code,
+      http_status: typeof err.status === 'number' ? err.status : undefined,
+      severity,
+      release_stage: RELEASE_STAGE,
+      app_version: APP_VERSION,
+      handled,
+    });
+    props.surface = 'cli';
+    // Immediate send (not batched) so flush() before exit can await it.
+    const p = Promise.resolve(client.captureExceptionImmediate(sanitizeError(error), getDistinctId(), props))
+      .catch(() => {})
+      .finally(() => pendingExceptions.delete(p));
+    pendingExceptions.add(p);
   } catch {
     // swallow
   }
@@ -214,7 +287,7 @@ export async function flush() {
   try {
     if (!enabled || !client || !captured) return;
     await Promise.race([
-      client.flush().catch(() => {}),
+      Promise.allSettled([...pendingExceptions]).then(() => client?.flush().catch(() => {})),
       new Promise((resolve) => setTimeout(resolve, FLUSH_HARD_TIMEOUT_MS)),
     ]);
   } catch {
@@ -230,7 +303,7 @@ export async function shutdown() {
   try {
     if (!enabled || !client || !captured) return;
     await Promise.race([
-      client.shutdown().catch(() => {}),
+      Promise.allSettled([...pendingExceptions]).then(() => client?.shutdown().catch(() => {})),
       new Promise((resolve) => setTimeout(resolve, FLUSH_HARD_TIMEOUT_MS)),
     ]);
   } catch {
@@ -238,6 +311,15 @@ export async function shutdown() {
   } finally {
     client = null;
   }
+}
+
+/** Test helper: inject a fake client (or null) and mark telemetry enabled/disabled. */
+export function _setClientForTests(fake) {
+  initialized = true;
+  enabled = Boolean(fake);
+  client = fake;
+  captured = false;
+  pendingExceptions.clear();
 }
 
 /** Test/introspection helper — whether telemetry is currently active. */
