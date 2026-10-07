@@ -5,7 +5,7 @@ import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import {
   hasKeystore, hasEnvKey, hasWallet, readKeystoreAddress,
-  createKeystore, getUsdcBalance, buildOnrampUrl, loadPrivateKey,
+  createKeystore, getUsdcBalance, buildOnrampUrl, loadPrivateKey, WRONG_PASSPHRASE_MESSAGE,
 } from '../lib/wallet.js';
 import { promptHidden, promptYesNo } from '../lib/prompt.js';
 
@@ -226,7 +226,10 @@ export function registerWalletCommand(program) {
         try {
           pk = loadPrivateKey({ passphrase: pass });
         } catch (err) {
-          renderErr({ message: err.message }, opts);
+          // A wrong passphrase is the user's mistake: show it, don't report it.
+          // Anything else (unreadable or truncated keystore, unknown format) is a
+          // real fault and goes through as the Error so telemetry sees it.
+          renderErr(err.message === WRONG_PASSPHRASE_MESSAGE ? { message: err.message } : err, opts);
           return;
         }
         const address = readKeystoreAddress();
