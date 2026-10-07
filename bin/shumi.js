@@ -38,14 +38,14 @@ process.on('SIGTERM', () => { handleSignal(143); });
 // Last-resort error hooks: record the crash, flush best-effort, then preserve
 // the real exit behavior (non-zero exit). We do NOT swallow the error.
 process.on('unhandledRejection', (reason) => {
-  captureError(reason instanceof Error ? reason : new Error(String(reason)), { hook: 'unhandledRejection' });
+  captureError(reason instanceof Error ? reason : new Error(String(reason)), { hook: 'unhandledRejection' }, { handled: false });
   flush().finally(() => {
     process.stderr.write(`shumi: unhandled rejection: ${reason?.message || reason}\n`);
     process.exit(1);
   });
 });
 process.on('uncaughtException', (err) => {
-  captureError(err, { hook: 'uncaughtException' });
+  captureError(err, { hook: 'uncaughtException' }, { handled: false });
   flush().finally(() => {
     process.stderr.write(`shumi: uncaught exception: ${err?.message || err}\n`);
     process.exit(1);
@@ -96,7 +96,7 @@ program
     process.exit(process.exitCode ?? 0);
   })
   .catch(async (err) => {
-    captureError(err, { hook: 'parse_catch' });
+    captureError(err, { hook: 'parse_catch' }, { handled: false });
     await flush();
     process.stderr.write(`shumi: ${err?.message || err}\n`);
     process.exit(1);
