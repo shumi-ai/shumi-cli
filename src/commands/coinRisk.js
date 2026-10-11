@@ -4,6 +4,17 @@ import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 import { withSchema } from '../lib/schema.js';
 import { smartFormat } from '../lib/smartFormat.js';
 import { formatPercentUnits } from './funding.js';
+
+// Backends from before mayrsascha/coinrotator-ai#512 still send who-pays fields; funding is a
+// signed APR now, so --json drops them the same way --schema and multi-symbol output do.
+export function withoutPayerFields(env) {
+  const target = env?.data?.data ?? env?.data;
+  if (target && typeof target === 'object') {
+    delete target.funding_paying_side;
+    delete target.funding_receiving_side;
+  }
+  return env;
+}
 import { renderCoinLookup } from '../lib/currentTrend.js';
 
 /**
@@ -32,7 +43,7 @@ export function registerCoinRiskCommand(coinCmd) {
         }
         // If only one symbol and no error, render as single record
         if (envs.length === 1 && !envs[0]._error) {
-          renderOk(envs[0], opts, (data) => renderSingleRisk(data));
+          renderOk(withoutPayerFields(envs[0]), opts, (data) => renderSingleRisk(data));
           return;
         }
         // Multi-symbol: render as comparison

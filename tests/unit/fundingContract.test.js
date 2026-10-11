@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatPercentUnits } from '../../src/commands/funding.js';
-import { renderSingleRisk } from '../../src/commands/coinRisk.js';
+import { renderSingleRisk, withoutPayerFields } from '../../src/commands/coinRisk.js';
 
 describe('funding percent units', () => {
   it('does not multiply APR values that are already percentages', () => {
@@ -49,5 +49,12 @@ describe('coin risk funding contract', () => {
     const output = chunks.join('');
     expect(output).toContain('-3.20%');
     expect(output).not.toMatch(/funding pays|funding receives/);
+  });
+});
+
+describe('coin risk --json for one symbol', () => {
+  it('drops who-pays fields an older backend still sends', () => {
+    const env = { data: { data: { symbol: 'BTC', funding_apr: 8, funding_paying_side: 'longs', funding_receiving_side: 'shorts' } } };
+    expect(withoutPayerFields(env).data.data).toEqual({ symbol: 'BTC', funding_apr: 8 });
   });
 });
