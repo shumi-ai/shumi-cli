@@ -58,7 +58,7 @@ export async function runSignal(symbol, opts) {
 
     renderOk(env, opts, (d) => {
       const color = VERDICT_COLOR[d.verdict] || chalk.dim;
-      process.stdout.write(`\n${chalk.bold(d.symbol)}  ${color(d.verdict.toUpperCase())}  ${chalk.dim(`(score ${d.score}, confidence ${d.confidence})`)}\n`);
+      process.stdout.write(`\n${chalk.bold(d.symbol)}  ${color(d.verdict.toUpperCase())}  ${chalk.dim(`(score ${d.score}, coverage ${d.coverage ?? d.confidence})`)}\n`);
       if (d.as_of) process.stdout.write(chalk.dim(`as of ${d.as_of}\n`));
       process.stdout.write('\n');
       for (const line of d.evidence) {
@@ -67,7 +67,7 @@ export async function runSignal(symbol, opts) {
       process.stdout.write('\n');
       const failed = Object.entries(d.sources).filter(([, s]) => s !== 'fulfilled').map(([k]) => k);
       if (failed.length) {
-        process.stdout.write(chalk.yellow(`(missing inputs: ${failed.join(', ')} — verdict confidence reduced)\n`));
+        process.stdout.write(chalk.yellow(`(missing inputs: ${failed.join(', ')} — coverage reduced)\n`));
       }
       process.stdout.write(chalk.dim('full bundle: shumi signal ' + d.symbol + ' --json | jq .data.raw\n'));
     });
@@ -89,7 +89,8 @@ export function registerSignalCommand(program) {
       symbol: 'string',
       verdict: 'enum: strong-bull | bull | neutral | bear | strong-bear',
       score: 'number (-4 to +4)',
-      confidence: 'enum: high | medium | low',
+      coverage: 'enum: high | medium | low — how many of the four inputs answered (4 high, 2-3 medium, 0-1 low); not a measure of whether the verdict is right',
+      confidence: 'deprecated alias of coverage, same value',
       as_of: 'ISO timestamp of freshest underlying data',
       evidence: 'string[] (human-readable bullet points)',
       sources: 'object — fulfilled/rejected status per upstream',
@@ -99,6 +100,7 @@ export function registerSignalCommand(program) {
       symbol: 'BTC',
       verdict: 'bull',
       score: 1.5,
+      coverage: 'high',
       confidence: 'high',
       as_of: '2026-05-17T08:12:00Z',
       evidence: ['trend (daily) is UP since 2026-05-12', 'funding APR 8.3% (percentile 65, tier warm)'],
