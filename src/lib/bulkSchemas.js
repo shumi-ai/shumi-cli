@@ -84,6 +84,10 @@ const SCHEMAS = {
   'pairs.signal':          { kind: 'object', fields: { pair: 'string', signal: 'string', ratio: 'number' }, note: 'requires --token-a and --token-b' },
   'pairs.delta-neutral':   { kind: 'object', fields: { suggestions: 'array of {symbol, longExchange, shortExchange, netApr, ...}', timestamp: 'ISO timestamp' } },
 
+  // Unlocks
+  'unlocks.coin':           { kind: 'object', fields: { state: 'upcoming|fully_unlocked|no_unlock_data|not_covered', next: 'object|null — { date, daysUntil, tokens, usdValue, pctOfMarketCap, legs, basis, range }', linear30d: 'object|null', overhang90d: 'object|null', progress: 'object|null', previous: 'object|null', unlockHistory: 'object|null — past unlocks with 7-day moves before/after (history, not a forecast)', provenance: 'object — sources with url and asOf' }, note: 'requires <symbol>' },
+  'unlocks.calendar':       { kind: 'object', fields: { window: 'object — { from, to, days }', rows: 'array — { date, daysUntil, coin, tokens, usdValue, pctOfMarketCap, recipientClasses, insiderPct, source }', total: 'number', truncated: 'boolean', provenance: 'object — { source, asOf, coverage }' } },
+
   // Tracking
   'holders':                { kind: 'object', fields: { watchlist: 'array — contracts being tracked', meta: 'object' }, note: 'default action=watchlist' },
   'holders.watchlist':      { kind: 'object', fields: { watchlist: 'array — { contract, label, chainId, ... }', meta: 'object' } },
