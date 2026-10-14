@@ -25,6 +25,7 @@ import { registerFuturesCommand } from './commands/futures.js';
 import { registerWalkforwardCommand } from './commands/walkforward.js';
 import { registerPairsCommand } from './commands/pairs.js';
 import { registerHoldersCommand } from './commands/holders.js';
+import { registerUnlocksCommand } from './commands/unlocks.js';
 import { registerWalletsCommand } from './commands/wallets.js';
 import { registerTranscriptsCommand } from './commands/transcripts.js';
 import { registerBasketCommand } from './commands/basket.js';
@@ -59,6 +60,7 @@ export function registerCommands(program) {
   registerWalkforwardCommand(program);
   registerPairsCommand(program);     // includes delta-neutral as `pairs delta-neutral`
   registerHoldersCommand(program);
+  registerUnlocksCommand(program);
   registerWalletsCommand(program);
   registerTranscriptsCommand(program);
   registerBasketCommand(program);

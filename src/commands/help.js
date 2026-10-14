@@ -18,7 +18,7 @@ import { resolveMode } from '../lib/output.js';
 const GROUPS = [
   { title: 'Start here', cmds: ['signal', 'coin', 'resolve', 'ask'] },
   { title: 'Market & trends', cmds: ['market', 'trends', 'scan', 'category', 'narratives', 'sentiment', 'funding', 'regime'] },
-  { title: 'Research', cmds: ['holders', 'wallets', 'transcripts', 'tweets', 'search', 'pairs', 'basket', 'futures', 'walkforward', 'signal-quality'] },
+  { title: 'Research', cmds: ['unlocks', 'holders', 'wallets', 'transcripts', 'tweets', 'search', 'pairs', 'basket', 'futures', 'walkforward', 'signal-quality'] },
   { title: 'Live', cmds: ['watch'] },
   { title: 'Account & setup', cmds: ['login', 'logout', 'whoami', 'billing', 'keys', 'wallet', 'init', 'doctor', 'health', 'version', 'commands'] },
 ];
