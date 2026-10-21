@@ -42,14 +42,15 @@ $ shumi doctor --json | jq '.data.ok'
 # One free query, no account
 shumi coin BTC
 
-# Sign in for unlimited
+# Sign in for a free allowance: a starter grant, then a daily
+# top-up that resets at 00:00 UTC. Pro is unlimited.
 shumi login
 
 # Typed data — deterministic, scriptable
 shumi coin risk BTC                       # bundled risk context
 shumi funding momentum --symbol BTC       # perpetual funding momentum
 shumi regime active                       # active regime positions
-shumi signal-quality                      # Sharpe / win-rate envelope
+shumi signal-quality                      # signal-layer summary stats
 shumi market prices --symbols BTC,ETH,SOL # bulk live prices
 shumi billing tier                        # your entitlement
 
@@ -66,7 +67,7 @@ shumi ask "why is HYPE pumping?"
 | `shumi coin risk <symbol>` | Bundled risk context (price, funding, trend, sentiment, BTC correlation) |
 | `shumi funding momentum [--symbol X]` | Funding-rate momentum, market-wide or per coin |
 | `shumi regime active\|signals\|history <sym>\|confidence` | Market regime state |
-| `shumi signal-quality` | Sharpe, win rate, sample size for the signal layer |
+| `shumi signal-quality` | Summary stats for the signal layer |
 | `shumi market prices [--symbols ...] [--baselines]` | Bulk live prices, optional 4h/24h/7d baselines |
 
 ### NLP queries (free-form, AI-routed)
