@@ -3,11 +3,13 @@ import { join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 
-// The data/CLI surface talks to coinrotator-ai (Fastify on Render). Vercel was
-// the wrong runtime — cold starts, streaming flakiness, and a 300s max-duration
-// cap that broke `shumi watch`. Render keeps Fastify warm and supports proper
-// NDJSON streaming via reply.raw.
-const DEFAULT_API_URL = 'https://coinrotator-ai.onrender.com/api/cli';
+// The data/CLI surface talks to coinrotator-ai (Fastify on Render) through its
+// public host, api.shumi.ai. Vercel was the wrong runtime — cold starts,
+// streaming flakiness, and a 300s max-duration cap that broke `shumi watch`.
+// api.shumi.ai is Cloudflare in front of the same Render service; `shumi watch`
+// survives its 100 s idle limit because the server sends a heartbeat at least
+// every 45 s (mayrsascha/coinrotator-ai#612).
+const DEFAULT_API_URL = 'https://api.shumi.ai/api/cli';
 const API_URL = (process.env.SHUMI_API_URL || DEFAULT_API_URL).replace(/\/$/, '');
 
 // API key management (/keys) stays on the Next.js app — that's where the JWT

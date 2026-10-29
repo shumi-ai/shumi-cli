@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { createRequire } from 'module';
-import { getToken, CONFIG_FILE } from '../lib/config.js';
+import { getToken, CONFIG_FILE, API_URL } from '../lib/config.js';
 import { inspectToken } from '../lib/token.js';
 
 const require = createRequire(import.meta.url);
@@ -49,9 +49,10 @@ export function registerInitCommand(program) {
       process.stdout.write('\n' + chalk.bold('  2. Network\n'));
       let networkOk = false;
       try {
-        const res = await fetch('https://coinrotator-ai.onrender.com/robots.txt', { signal: AbortSignal.timeout(5000) });
+        const apiOrigin = new URL(API_URL).origin;
+        const res = await fetch(`${apiOrigin}/robots.txt`, { signal: AbortSignal.timeout(5000) });
         networkOk = res.ok;
-        line(chalk.green('✓'), `coinrotator-ai.onrender.com reachable (${res.status})`);
+        line(chalk.green('✓'), `${new URL(API_URL).host} reachable (${res.status})`);
       } catch (err) {
         line(chalk.red('✗'), `network: ${err.message}`);
       }

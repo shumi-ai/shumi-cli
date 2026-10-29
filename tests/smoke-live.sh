@@ -5,7 +5,7 @@
 #   SHUMI_TOKEN=shumi_sk_xxx ./tests/smoke-live.sh
 #
 # Override:
-#   SHUMI_API_URL=...              # default: https://coinrotator-ai.onrender.com/api/cli
+#   SHUMI_API_URL=...              # default: https://api.shumi.ai/api/cli
 #   SHUMI_BIN=/path/to/shumi       # default: node bin/shumi.js (relative to repo root)
 #   SMOKE_SYMBOL=ETH               # default: BTC (for single-symbol probes)
 #   SMOKE_WATCH=0                  # set to 0 to skip the streaming check
@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SHUMI_BIN_DEFAULT="node $REPO_ROOT/bin/shumi.js"
 SHUMI_BIN="${SHUMI_BIN:-$SHUMI_BIN_DEFAULT}"
-SHUMI_API_URL="${SHUMI_API_URL:-https://coinrotator-ai.onrender.com/api/cli}"
+SHUMI_API_URL="${SHUMI_API_URL:-https://api.shumi.ai/api/cli}"
 SMOKE_SYMBOL="${SMOKE_SYMBOL:-BTC}"
 SMOKE_WATCH="${SMOKE_WATCH:-1}"
 SMOKE_NLP="${SMOKE_NLP:-0}"
