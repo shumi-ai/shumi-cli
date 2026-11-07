@@ -61,9 +61,11 @@ export function registerFundingCommand(program) {
 // Values from funding/momentum are already in PERCENT units (backend convention:
 // cli/routes/signal.js consumes funding.apr directly as a percent, e.g. apr 1.4 = 1.4%).
 // Earlier this multiplied by 100, inflating every render 100× (-9.9 → "-990.00%").
+// Signed: funding's sign is the whole message, so a positive rate carries its "+".
 export function formatPercentUnits(n) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '—';
-  return `${Number(n).toFixed(2)}%`;
+  const text = Number(n).toFixed(2);
+  return `${Number(text) > 0 ? '+' : ''}${text === '-0.00' ? '0.00' : text}%`;
 }
 
 const pct = formatPercentUnits;

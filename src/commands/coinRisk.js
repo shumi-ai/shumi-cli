@@ -4,6 +4,17 @@ import { typedAction, addUniversalFlags } from '../lib/typedCmd.js';
 import { withSchema } from '../lib/schema.js';
 import { smartFormat } from '../lib/smartFormat.js';
 import { formatPercentUnits } from './funding.js';
+
+// Backends from before mayrsascha/coinrotator-ai#512 still send who-pays fields; funding is a
+// signed APR now, so --json drops them the same way --schema and multi-symbol output do.
+export function withoutPayerFields(env) {
+  const target = env?.data?.data ?? env?.data;
+  if (target && typeof target === 'object') {
+    delete target.funding_paying_side;
+    delete target.funding_receiving_side;
+  }
+  return env;
+}
 import { renderCoinLookup } from '../lib/currentTrend.js';
 
 /**
@@ -32,7 +43,7 @@ export function registerCoinRiskCommand(coinCmd) {
         }
         // If only one symbol and no error, render as single record
         if (envs.length === 1 && !envs[0]._error) {
-          renderOk(envs[0], opts, (data) => renderSingleRisk(data));
+          renderOk(withoutPayerFields(envs[0]), opts, (data) => renderSingleRisk(data));
           return;
         }
         // Multi-symbol: render as comparison
@@ -43,8 +54,6 @@ export function registerCoinRiskCommand(coinCmd) {
             symbol: d.symbol,
             price: d.price,
             funding_apr: d.funding_apr,
-            funding_paying_side: d.funding_paying_side,
-            funding_receiving_side: d.funding_receiving_side,
             carry_if_long: d.carry_if_long,
             carry_if_short: d.carry_if_short,
             trend_daily: d.trend_daily,
@@ -68,16 +77,14 @@ export function registerCoinRiskCommand(coinCmd) {
       symbol: 'string',
       price: 'number',
       funding_apr: 'number — annualized rate in percent units (7.4 = 7.4%)',
-      funding_paying_side: 'longs | shorts | null',
-      funding_receiving_side: 'longs | shorts | null',
-      carry_if_long: 'deterministic perpetual-position carry string',
-      carry_if_short: 'deterministic perpetual-position carry string',
+      carry_if_long: 'deterministic cost or income of a long perp position, in money per $10k',
+      carry_if_short: 'deterministic cost or income of a short perp position, in money per $10k',
       trend_daily: 'string',
       trend_weekly: 'string',
       sentiment_stance: 'string',
       btc_correlation: 'number',
     },
-    note: 'Funding applies to perpetual positions only; spot neither pays nor receives it. Single-symbol returns a flat object; multi-symbol returns an array, one row per symbol.',
+    note: 'Funding applies to perpetual positions only; spot positions have no funding. The sign of funding_apr says which side carries the cost. Single-symbol returns a flat object; multi-symbol returns an array, one row per symbol.',
   });
 
   addUniversalFlags(coinCmd
@@ -148,8 +155,6 @@ export function renderSingleRisk(envelope) {
     ['symbol',          d.symbol],
     ['price',           d.price],
     ['funding APR',     formatPercentUnits(d.funding_apr)],
-    ['funding pays',    d.funding_paying_side],
-    ['funding receives', d.funding_receiving_side],
     ['carry if long',   d.carry_if_long],
     ['carry if short',  d.carry_if_short],
     ['trend (daily)',   `${d.trend_daily || '—'} since ${d.trend_daily_since || '—'}`],
