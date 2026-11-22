@@ -72,7 +72,8 @@ Stocks, ETFs, metals, indices and FX perps: `shumi rwa lookup <SYMBOL> --agent`
 
 Each input carries its own time. Read them, and say which one you used.
 
-- `meta.data_age_seconds`: age of the envelope's `as_of`.
+- `meta.data_age_seconds`: age of the envelope's `as_of`. That stamp comes from
+  one input. It is not the oldest input, so check the others too.
 - `raw.risk.price_as_of`: the live price.
 - `raw.risk.futures_as_of`: funding and open interest.
 - `raw.risk.levels.as_of` and `data_age_hours`: levels use the last completed
@@ -119,7 +120,7 @@ shumi scan --sort change24h --limit 10 --agent        # top 24h gainers
 shumi scan --sort change24h --order asc --limit 10 --agent
 shumi trends fresh --limit 10 --agent                 # newly started trends
 shumi trends stale --limit 10 --agent                 # longest-running trends
-shumi trends aligned --agent                          # daily and weekly agree
+shumi trends aligned --agent                          # trend agrees across timeframes
 shumi category list --agent
 shumi category coins "<name>" --agent
 shumi narratives --agent
