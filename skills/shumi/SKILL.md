@@ -89,8 +89,8 @@ Signs that an input did not land, even when the exit code is 0:
 
 Report a missing input as missing. Do not fill the gap from memory.
 
-An empty list from `market crossing`, `funding alerts` or `walkforward` is a
-reading: nothing fired. It is not an outage.
+An empty list from `market crossing` or `funding alerts` is a reading: nothing
+fired. It is not an outage. `walkforward` is the exception, see Workflow 7.
 
 ## Workflow 4: check several coins or a book
 
@@ -137,14 +137,21 @@ Use Shumi's own tracked record. Never ask `shumi ask` to invent a backtest.
 
 ```bash
 shumi signal-quality --asset <SYMBOL> --agent  # reliability_tier: PRELIMINARY | VALIDATED | INSUFFICIENT_DATA
+shumi walkforward signals --agent
 shumi walkforward outcomes --agent
-shumi walkforward positions --agent
 shumi futures history <SYMBOL> --agent
 shumi pairs history --agent
 ```
 
-If the tier is `INSUFFICIENT_DATA` or `PRELIMINARY`, say so next to any number
-you quote.
+`signal-quality` scores one signal type, `mean_reversion` unless you pass
+`--signal-type`. It does not score the `signal` verdict. Name the type next to
+any number you quote. If the tier is `INSUFFICIENT_DATA` or `PRELIMINARY`, say
+so too.
+
+The engine that fills `walkforward positions` and `walkforward outcomes` is
+paused. An empty table there means the table is not being filled, not that
+nothing fired. Rows 30 or more days old are history, not a current view. Use
+`walkforward signals` for recent data.
 
 ## Workflow 8: funding carry and pairs
 
@@ -193,8 +200,10 @@ Say so plainly instead of improvising:
 | 2 | `AUTH_REQUIRED` | Not logged in, or "Free query used. Sign in to continue" | User runs `shumi login` |
 | 2 | `AUTH_EXPIRED` | "Session expired …" | User runs `shumi login` |
 | 3 | `RATE_LIMITED` / `PAYMENT_REQUIRED` | Quota or billing block | Tell the user. Do not pay on your own. |
+| 1 | `USER_ERROR` | Bad flag or argument | Check `shumi <command> --help` |
 | 1 | `UPGRADE_REQUIRED` | CLI too old for the server | `npm i -g shumi@latest` |
 | 4 | `UPSTREAM_4XX` | Not found, for example an unknown symbol | `shumi resolve <query>` |
 | 5 / 6 | `UPSTREAM_5XX` / `NETWORK` | Server or network fault | Retry once, then report it |
+| 7 | `INTERNAL` | Client fault, or a failed `shumi doctor` check | Read the doctor checks; report the rest |
 
 `shumi commands --agent` lists every command with its output shape.
