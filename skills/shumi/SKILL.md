@@ -1,148 +1,199 @@
 ---
 name: shumi
-description: "Crypto trade intelligence powered by AI. Use when the user asks about crypto markets, coin analysis, price trends, market sentiment, funding rates, delta-neutral strategies, narratives, category breakdowns, or any crypto trading question. Requires Node.js 18+."
+description: "Crypto research and trade support from the Shumi CLI. Use when the user asks about a coin, the market, trend, funding, sentiment, regime, narratives, categories, token unlocks, delta-neutral funding carry, or wants a trade plan (entry, stop, size) or a check on a coin they hold. Also use when a coin shows no data, an answer looks stale, or Shumi says the session expired. Requires Node.js 22+."
 license: MIT
 allowed-tools: Bash(shumi *) Bash(npx --yes shumi *) Bash(npx shumi *)
 ---
 
-# Shumi — Crypto Trade Intelligence
+# Shumi: crypto research and trade support
 
-Shumi is an AI-powered crypto analysis engine. It classifies queries, fetches real-time market data from multiple sources, and generates formatted analysis. Use it to answer any crypto market question.
+Shumi returns structured market readings: trend, funding, sentiment, regime, and
+price levels with a trade plan. Use the typed commands below for facts. Use
+`shumi ask` only for a question no typed command answers.
 
-## Invocation Rules
+## How to run it
 
-**IMPORTANT:** Always run `shumi` as a simple, standalone command. Do NOT:
-- Use `cd` before running shumi — it works from any directory
-- Chain commands with `&&`, `||`, or `;`
-- Redirect output with `>`, `2>`, or `2>/dev/null`
-- Pipe output with `|`
-- Wrap in subshells `$(...)` or backticks
+- Run `shumi` as one standalone command. No `cd`, no `&&`/`;`, no pipes, no
+  redirects, no subshells. It works from any directory.
+- Add `--agent` to every call. You get a JSON envelope (`schemaVersion`, `data`,
+  `meta`) on stdout and a JSON error envelope on stderr.
+- Cut large answers with `--fields <keys>` and `--top <n>`, not with `jq`.
+- A response over about 50 KB is written to disk. The envelope then holds a
+  preview plus `_spill.path`. Read that file only if the preview lacks what you
+  need.
+- If `shumi` is not installed, use `npx --yes shumi …` instead.
 
-Correct: `npx --yes shumi sentiment --coin BTC`
-Also correct (if globally installed): `shumi sentiment --coin BTC`
-Wrong: `cd /some/path && npx --yes shumi sentiment --coin BTC 2>/dev/null`
+**Payment warning:** if `SHUMI_X402_PRIVATE_KEY` is set, `--agent` pays priced
+queries without a prompt, up to `SHUMI_MAX_PRICE_USDC` per call and
+`SHUMI_DAILY_USDC_CAP` per day. Never pass `--auto-pay` or set those variables
+yourself. Tell the user before a long run of calls.
 
-## Setup
-
-One free query works without authentication. For continued use:
-
-```bash
-shumi login
-```
-
-This opens a browser for wallet authentication. Check status with `shumi health`.
-
-## Commands
-
-### Coin Analysis
+## Workflow 1: start of a session
 
 ```bash
-shumi coin BTC                    # Full analysis: trend, streak, sentiment
-shumi coin ETH --interval 1w     # Weekly interval
-shumi coin SOL --history          # With 24h historical comparison
-shumi coin BTC --raw              # Raw JSON (structured data for programmatic use)
+shumi doctor --agent        # auth, network, CLI version
+shumi billing tier --agent  # tier and expiry
 ```
 
-### Market Overview
+Only `shumi ask` has a free query without login. Every typed command needs
+`shumi login`, which opens a browser. The user must run that step.
+
+## Workflow 2: read one coin
+
+1. **Pin the coin.** Tickers collide and coins migrate. If the user gives a name,
+   a contract, or a ticker you are not sure of, run `shumi resolve <query> --agent`
+   first. Before you say a coin has no data, resolve it and check for a renamed
+   ticker.
+2. **Get the verdict.** `shumi signal <SYMBOL> --agent` combines trend, funding,
+   sentiment and regime in one call.
+   - `verdict` (strong-bull … strong-bear) and `score` (-4 to +4).
+   - `coverage` counts how many of the four inputs answered. It does not say
+     whether the verdict is right.
+   - `evidence` gives the reasons in plain lines.
+   - `raw.risk.levels` holds support, resistance, ATR, moving averages, and a
+     full plan per side: `plan_long` / `plan_short` with entry zone, stop
+     (triggered by a daily close), position size for 1 % account risk, and
+     `rr_long` / `rr_short`, `conviction_long` / `conviction_short`.
+3. **Go deeper only on the input that matters for the question:**
 
 ```bash
-shumi market                      # Market health: UP/HODL/DOWN distribution
-shumi market --crossing           # Include trend crossing data
-shumi market --interval 1w        # Weekly view
+shumi coin risk <SYMBOL> --agent             # price, funding, OI, trend, sentiment, BTC correlation, levels
+shumi funding momentum --symbol <SYMBOL> --agent
+shumi sentiment coin <SYMBOL> --agent
+shumi regime history <SYMBOL> --agent
+shumi futures history <SYMBOL> --agent
+shumi unlocks coin <SYMBOL> --agent          # next unlock, size, recipients
 ```
 
-### Sentiment
+Stocks, ETFs, metals, indices and FX perps: `shumi rwa lookup <SYMBOL> --agent`
+(also `shumi stock` / `shumi commodity`).
+
+## Workflow 3: check the data before you state it
+
+Each input carries its own time. Read them, and say which one you used.
+
+- `meta.data_age_seconds`: age of the envelope's `as_of`.
+- `raw.risk.price_as_of`: the live price.
+- `raw.risk.futures_as_of`: funding and open interest.
+- `raw.risk.levels.as_of` and `data_age_hours`: levels use the last completed
+  daily bar, so they are normally several hours older than the price. That is
+  expected, not a fault.
+
+Signs that an input did not land, even when the exit code is 0:
+
+- Any `sources` entry that is not `fulfilled` (the `signal` command).
+- A per-symbol `error` inside a multi-symbol `coin risk` answer.
+- `raw.risk.price_low_confidence: true`, or `funding_reliable: false`.
+- `levels.status` other than `ok`.
+
+Report a missing input as missing. Do not fill the gap from memory.
+
+An empty list from `market crossing`, `funding alerts` or `walkforward` is a
+reading: nothing fired. It is not an outage.
+
+## Workflow 4: check several coins or a book
 
 ```bash
-shumi sentiment                   # Overall market sentiment
-shumi sentiment --coin BTC        # Sentiment for a specific coin
-shumi sentiment --category "AI"   # Sentiment for a category
-shumi sentiment --narrative "RWA" # Sentiment for a narrative
+shumi coin risk BTC ETH SOL --agent                          # one call, one row per coin
+shumi market prices --symbols BTC,ETH,SOL --baselines --agent  # price vs 4h / 24h / 7d ago
 ```
 
-### Trends
+`coin risk` takes symbols, not position sizes. Weight the result by the user's
+sizes yourself and say that you did.
+
+## Workflow 5: market backdrop
 
 ```bash
-shumi trends                      # Fresh trends (newly started)
-shumi trends --stale              # Stale trends (longest running)
-shumi trends --aligned            # Coins aligned across all timeframes
-shumi trends --limit 10           # Limit results
+shumi market health --agent     # share of coins in UP / HODL / DOWN
+shumi market global --agent     # total cap, BTC dominance
+shumi regime active --agent
+shumi sentiment market --agent  # large: use --fields or read the spill file
+shumi brief --agent             # one-screen digest: positions, exits, watch list
 ```
 
-### Scan / Filter
+## Workflow 6: find candidates
 
 ```bash
-shumi scan --trend UP --category "DeFi"    # Uptrending DeFi coins
-shumi scan --category "Layer 2"            # Category names are matched forgivingly
-shumi scan --mcap-min 100000000            # Market cap > $100M
-shumi scan --trend DOWN --limit 5          # Top 5 downtrending
+shumi scan --trend UP --category "DeFi" --mcap-min 100000000 --limit 10 --agent
+shumi scan --sort change24h --limit 10 --agent        # top 24h gainers
+shumi scan --sort change24h --order asc --limit 10 --agent
+shumi trends fresh --limit 10 --agent                 # newly started trends
+shumi trends stale --limit 10 --agent                 # longest-running trends
+shumi trends aligned --agent                          # daily and weekly agree
+shumi category list --agent
+shumi category coins "<name>" --agent
+shumi narratives --agent
+shumi narratives "<name>" --agent
+shumi unlocks calendar --days 14 --insiders --agent   # upcoming supply by % of market cap
 ```
 
-### Categories & Narratives
+`scan` has no exchange filter. It refuses `--exchange` with an explanation.
+Run `shumi signal` on a candidate before you present it as a setup.
+
+## Workflow 7: "has this worked before?"
+
+Use Shumi's own tracked record. Never ask `shumi ask` to invent a backtest.
 
 ```bash
-shumi category                    # All categories
-shumi category "DeFi"             # DeFi trend breakdown
-shumi narratives                  # All current narratives
-shumi narratives "AI"             # AI narrative sentiment
+shumi signal-quality --asset <SYMBOL> --agent  # reliability_tier: PRELIMINARY | VALIDATED | INSUFFICIENT_DATA
+shumi walkforward outcomes --agent
+shumi walkforward positions --agent
+shumi futures history <SYMBOL> --agent
+shumi pairs history --agent
 ```
 
-### Delta-Neutral (Funding Rate Arbitrage)
+If the tier is `INSUFFICIENT_DATA` or `PRELIMINARY`, say so next to any number
+you quote.
+
+## Workflow 8: funding carry and pairs
 
 ```bash
-shumi delta-neutral                        # All opportunities
-shumi delta-neutral --exchange Hyperliquid # Filter by exchange
-shumi delta-neutral --dex-only             # DEX only
-shumi delta-neutral --symbol BTC           # Specific coin
+shumi pairs delta-neutral --dex-only --limit 10 --agent
+shumi pairs delta-neutral --symbol BTC --agent
+shumi pairs delta-neutral --exchange Hyperliquid --agent
+shumi pairs suggestions --limit 10 --agent
+shumi pairs signal --token-a eth --token-b sol --agent
 ```
 
-### Web Search & Tweets
+State funding as the signed rate (`funding_apr`, positive or negative), not as
+which side pays.
+
+## Workflow 9: news, people and free-form questions
 
 ```bash
-shumi search "Ethereum ETF approval"      # Web search
-shumi search "ETH merge" --answer          # Direct answer instead of results
-shumi tweets elonmusk                      # Recent tweets from handle
+shumi search "<query>" --answer --agent
+shumi tweets <handle> --agent
+shumi ask "<question>" --agent
 ```
 
-### Free-Form
+Use `ask` last, for "why" questions and synthesis the typed commands do not
+cover. It is the slowest and costliest call. Multi-tool answers can take
+minutes.
 
-```bash
-shumi ask "Why is HYPE pumping?"           # Any crypto question
-shumi ask "Compare SOL vs ETH L2 fees"    # Complex analysis
-```
+## When to stop
 
-## Using --raw for Structured Data
+Stop when the user's question has an answer backed by fresh inputs. For one coin
+that is usually `resolve` (if needed) plus `signal`, plus at most one deeper
+call. Each call is metered, so do not fetch inputs the question does not need.
 
-Add `--raw` to any command to get JSON tool execution results instead of formatted text. Use this when you need to process the data programmatically:
+## Not supported yet
 
-```bash
-shumi coin BTC --raw    # Returns: { "steps": [{ "id": "btc", "tool": "getCoinBySymbol", "result": {...} }, ...] }
-shumi market --raw      # Returns: { "steps": [{ "id": "health", "tool": "getMarketHealth", "result": {...} }, ...] }
-```
+Say so plainly instead of improvising:
 
-The `steps` array contains each tool's raw output with the full data payload.
+- Marking an open trade from an entry price or date. There is no price-by-date
+  lookup. `market baselines` covers only 4h / 24h / 7d ago.
+- Portfolio risk weighted by size, and "what if BTC drops X %" shocks.
+  `coin risk` gives BTC correlation, not beta.
 
-## Common Options
+## Errors
 
-| Flag | Available On | Description |
-|------|-------------|-------------|
-| `--raw` | All commands | JSON output instead of markdown |
-| `--interval <1d\|1w>` | coin, market, sentiment, trends, scan, category, narratives | Time interval |
-| `--limit <n>` | trends, scan, delta-neutral | Max results |
+| Exit | Error code | Meaning | Action |
+|------|------------|---------|--------|
+| 2 | `AUTH_REQUIRED` | Not logged in, or "Free query used. Sign in to continue" | User runs `shumi login` |
+| 2 | `AUTH_EXPIRED` | "Session expired …" | User runs `shumi login` |
+| 3 | `RATE_LIMITED` / `PAYMENT_REQUIRED` | Quota or billing block | Tell the user. Do not pay on your own. |
+| 1 | `UPGRADE_REQUIRED` | CLI too old for the server | `npm i -g shumi@latest` |
+| 4 | `UPSTREAM_4XX` | Not found, for example an unknown symbol | `shumi resolve <query>` |
+| 5 / 6 | `UPSTREAM_5XX` / `NETWORK` | Server or network fault | Retry once, then report it |
 
-## Error Handling
-
-| Error | Meaning | Action |
-|-------|---------|--------|
-| "Authentication required" | Free query used up | Run `shumi login` |
-| "Rate limit exceeded" | Too many requests | Wait and retry |
-| "Authentication failed" | Token expired | Run `shumi login` again |
-| Command hangs > 30s | Server processing complex query | Normal for multi-tool queries, wait up to 5 min |
-
-## Tips
-
-- Use `--raw` when you need to extract specific data points from the response
-- `shumi ask` accepts any natural language query — use it for questions that don't fit a specific command
-- Combine scan filters: `shumi scan --trend UP --category "AI" --mcap-min 100000000 --limit 10`
-- `shumi scan` has no exchange filter yet; `--exchange` is refused with an explanation rather than returning spot-only listings
-- `shumi health` is a quick way to verify connectivity and auth status
+`shumi commands --agent` lists every command with its output shape.
