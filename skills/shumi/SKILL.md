@@ -200,7 +200,7 @@ Say so plainly instead of improvising:
 | 2 | `AUTH_REQUIRED` | Not logged in, or "Free query used. Sign in to continue" | User runs `shumi login` |
 | 2 | `AUTH_EXPIRED` | "Session expired …" | User runs `shumi login` |
 | 3 | `RATE_LIMITED` / `PAYMENT_REQUIRED` | Quota or billing block | Tell the user. Do not pay on your own. |
-| 1 | `USER_ERROR` | Bad flag or argument | Check `shumi <command> --help` |
+| 1 | none (plain `error: unknown option …` on stderr) | Bad flag or argument | Check `shumi <command> --help` |
 | 1 | `UPGRADE_REQUIRED` | CLI too old for the server | `npm i -g shumi@latest` |
 | 4 | `UPSTREAM_4XX` | Not found, for example an unknown symbol | `shumi resolve <query>` |
 | 5 / 6 | `UPSTREAM_5XX` / `NETWORK` | Server or network fault | Retry once, then report it |
